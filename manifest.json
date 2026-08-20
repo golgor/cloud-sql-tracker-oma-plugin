@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.golgor.cloud-sql-tracker",
+  "name": "Cloud SQL Tracker",
+  "version": "0.1.0",
+  "author": "golgor",
+  "license": "MIT",
+  "homepage": "https://github.com/golgor/cloud-sql-tracker-oma-plugin",
+  "description": "Bar dropdown to start, stop, and monitor Google Cloud SQL Auth Proxy connections via the cloud-sql-tracker CLI. Summon with: omarchy-shell shell toggle io.github.golgor.cloud-sql-tracker",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Cloud SQL Tracker",
+    "description": "Icon + running count; dropdown to toggle proxies by group. Requires cloud-sql-tracker on PATH.",
+    "category": "Development",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "refreshIntervalSec": 5,
+      "refreshIntervalOpenSec": 2,
+      "cliPath": "cloud-sql-tracker",
+      "minCliVersion": "0.1.0"
+    },
+    "schema": [
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Status poll when panel closed (seconds)",
+        "min": 2,
+        "max": 60,
+        "step": 1,
+        "defaultValue": 5,
+        "description": "How often to run cloud-sql-tracker status --json while the dropdown is closed."
+      },
+      {
+        "key": "refreshIntervalOpenSec",
+        "type": "integer",
+        "label": "Status poll when panel open (seconds)",
+        "min": 1,
+        "max": 30,
+        "step": 1,
+        "defaultValue": 2,
+        "description": "Faster poll while the dropdown is open so toggles feel live."
+      },
+      {
+        "key": "cliPath",
+        "type": "string",
+        "label": "CLI path",
+        "defaultValue": "cloud-sql-tracker",
+        "description": "Binary name or absolute path. Must be on PATH if not absolute."
+      },
+      {
+        "key": "minCliVersion",
+        "type": "string",
+        "label": "Minimum CLI version",
+        "defaultValue": "0.1.0",
+        "description": "Plugin refuses to drive an older cloud-sql-tracker (semver)."
+      }
+    ]
+  }
+}
