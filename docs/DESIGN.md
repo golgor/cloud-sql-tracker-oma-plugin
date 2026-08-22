@@ -4,11 +4,13 @@ Omarchy bar widget for [cloud-sql-tracker](https://github.com/golgor/cloud-sql-t
 
 ## Seam
 
-The plugin talks **only** to the CLI:
+The plugin talks **only** to the CLI, through the **Tracker** module (not from Bar/Panel directly):
 
 ```
-BarWidget / Panel  →  Process(["cloud-sql-tracker", ...])  →  stdout JSON
+BarWidget / Panel  →  Tracker  →  Process(["cloud-sql-tracker", ...])  →  stdout JSON
 ```
+
+Module layout and Tracker interface: [`docs/modules.md`](./modules.md). Domain words: [`CONTEXT.md`](../CONTEXT.md).
 
 No reads/writes of `~/.config/cloud-sql-tracker/connections.json`. Config stays owned by the CLI (hand-edited v1; `config` subcommands later).
 
