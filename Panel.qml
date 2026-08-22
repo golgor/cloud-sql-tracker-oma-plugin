@@ -243,18 +243,38 @@ Panel {
     }
   }
 
-  // h/l on a Group header: the explicit asymmetric actions, mirroring the two
-  // icon buttons the mouse gets. A no-op on Connection rows — the cursor is on
-  // a discrete row there, and silently acting on the whole Group would
-  // surprise (same reasoning as audio's adjustVolume on device rows).
-  function adjustGroup(delta) {
+  // h/l are the explicit asymmetric verbs, mirroring the two icon buttons the
+  // mouse gets on a Group header: l starts, h stops. They apply to whatever
+  // the cursor is on — a Group header acts on the Group, a Connection row acts
+  // on that Connection.
+  //
+  // Earlier this was a no-op on Connection rows, by analogy with audio's
+  // adjustVolume. That analogy was wrong: audio refuses because h/l there
+  // would move a *section-level* slider while the cursor sits on a row, so the
+  // thing acted on is not the thing highlighted. Here the cursor's target and
+  // the action's target are the same row, so there is nothing surprising to
+  // protect against — only a missing verb.
+  function adjustCursor(delta) {
+    if (root.trackerBusy) return
     var name = root.sectionGroupName(root.focusSection)
-    if (name === "" || root.selectedIndex !== -1) return
-    if (delta > 0) root.startGroup(name)
-    else root.stopGroup(name)
+    if (name === "") return
+
+    if (root.selectedIndex === -1) {
+      if (delta > 0) root.startGroup(name)
+      else root.stopGroup(name)
+      return
+    }
+
+    var list = root.connectionsForGroup(name)
+    if (root.selectedIndex >= list.length) return
+    if (delta > 0) root.startConnection(list[root.selectedIndex])
+    else root.stopConnection(list[root.selectedIndex])
   }
 
   function activateCursor() {
+    // Tracker silently ignores a second concurrent action, and an ignored one
+    // would leave an intent stranded until the next poll pulled the knob back.
+    if (root.trackerBusy) return
     if (root.focusSection === "header") { root.stopAll(); return }
     var name = root.sectionGroupName(root.focusSection)
     if (name === "") return
@@ -408,6 +428,22 @@ Panel {
     else root.startGroup(name)
   }
 
+  // Explicit per-Connection verbs for h/l. Unlike toggleConnection these do
+  // not consult the current Health state: asking to start something already
+  // running is harmless and idempotent at the CLI, and second-guessing it here
+  // would make h/l silently do nothing on the row the operator is pointing at.
+  function startConnection(conn) {
+    if (!root.tracker) return
+    root.setIntent(conn.id, true)
+    root.tracker.start({ kind: "id", id: conn.id })
+  }
+
+  function stopConnection(conn) {
+    if (!root.tracker) return
+    root.setIntent(conn.id, false)
+    root.tracker.stop({ kind: "id", id: conn.id })
+  }
+
   // UI decides the verb; Tracker deliberately has no toggle().
   function toggleConnection(conn) {
     if (!root.tracker) return
@@ -457,7 +493,7 @@ Panel {
           return
         }
         if (dy !== 0) root.moveCursor(dy)
-        else if (dx !== 0) root.adjustGroup(dx)
+        else if (dx !== 0) root.adjustCursor(dx)
       }
       onActivateRequested: if (root.cursorActive) root.activateCursor()
       onCloseRequested: root.close()

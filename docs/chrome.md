@@ -435,11 +435,24 @@ mouse and keyboard share one highlight instead of fighting over two.
 | `Enter` | Group header (`-1`) | Toggle the Group: `stop` if `running + starting > 0`, else `start` |
 | `Enter` | `"header"` | Stop all |
 | `h` / `l` | Group header (`-1`) | Explicit `stop` / `start` for that Group |
+| `h` / `l` | Connection row | Explicit `stop` / `start` for that Connection |
 | `Esc` | anywhere | Close |
 | `Tab` | anywhere | `switchPanel(direction)` |
 
 The keyboard needs one verb where the mouse has two buttons, hence `Enter`'s toggle
-heuristic; `h`/`l` remain for the explicit asymmetric actions.
+heuristic; `h`/`l` are the explicit asymmetric actions, and apply to whatever the
+cursor is on — a Group header acts on the Group, a Connection row acts on that
+Connection.
+
+`h`/`l` on a row deliberately do **not** consult the current Health state the way
+`Enter` does. Asking to start something already running is idempotent at the CLI, and
+second-guessing it here would make the key silently do nothing on the row the operator
+is pointing at.
+
+(`audio/Panel.qml` makes `h`/`l` a no-op on its device rows, but that is not a
+precedent to copy: there the keys move a *section-level* slider, so the thing acted on
+would not be the thing highlighted. Here the cursor's target and the action's target
+are the same row.)
 
 ### Traversal rules
 

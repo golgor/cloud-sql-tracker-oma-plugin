@@ -92,6 +92,7 @@ gallery (`plugins/dev-gallery/GalleryPanel.qml`) names
 | `Enter` | Group header | Toggle the Group: `stop` if `running + starting > 0`, else `start` |
 | `Enter` | Panel header | Stop all |
 | `h` / `l` | Group header | Explicit `stop` / `start` for that Group |
+| `h` / `l` | Connection row | Explicit `stop` / `start` for that Connection |
 | `Esc` | anywhere | Close |
 | `Tab` | anywhere | Switch to the sibling panel |
 

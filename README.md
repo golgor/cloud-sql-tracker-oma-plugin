@@ -36,6 +36,27 @@ Validate a local checkout:
 omarchy plugin validate ~/Code/Personal/cloud-sql-tracker-oma-plugin
 ```
 
+## Keyboard
+
+The panel is fully drivable without a mouse once open: `j`/`k` walk rows across
+group boundaries, `Enter` toggles whatever the cursor is on, `h`/`l` are the
+explicit stop/start verbs for a connection or a whole group, `Esc` closes, and
+`Tab` switches to the neighbouring bar panel.
+
+To summon it with a hotkey, add a binding to `~/.config/hypr/bindings.lua`:
+
+```lua
+o.bind("SUPER + CTRL + Q", "Cloud SQL Tracker",
+  "omarchy-shell shell toggle io.github.golgor.cloud-sql-tracker")
+```
+
+If that combination is already taken, `hl.unbind("SUPER + CTRL + Q")` on the line
+before releases it first — check with `omarchy menu keybindings --print`.
+
+Omarchy's built-in `SUPER + CTRL + <n>` also toggles the nth panel in the bar's
+right section, which may already reach this one; a named binding is preferred
+because the numbered form is positional and follows bar order.
+
 ## Local development
 
 For working on this plugin itself, symlink this checkout into Omarchy's plugin
