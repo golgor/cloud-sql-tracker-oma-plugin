@@ -18,6 +18,11 @@ Panel {
   property var anchorItem
   property var hostWidget
 
+  // The Tracker instance owned by BarWidget (docs/modules.md wiring:
+  // "panel.tracker = root.tracker"). Grouped list rendering against this
+  // lands in #16 — this ticket only wires the reference through.
+  property var tracker
+
   content: ColumnLayout {
     spacing: Style.space(2)
 
