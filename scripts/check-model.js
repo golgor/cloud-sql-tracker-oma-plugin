@@ -54,6 +54,21 @@ function checkBadVersionFixture() {
   console.log("ok: bad-version fixture (degraded.kind === \"schema\")")
 }
 
+function checkEmptyFixture() {
+  var result = Model.parseStatusDocument(readFixture("status.v1.empty.json"))
+
+  // The distinction the Panel's empty body depends on: a valid document that
+  // happens to describe nothing is *usable*, not Degraded. Getting this wrong
+  // would make "no Connections configured" render as "control plane broken".
+  assert.strictEqual(result.ok, true, "empty document is valid, not degraded")
+  assert.strictEqual(result.degraded, null)
+  assert.strictEqual(result.total, 0)
+  assert.deepStrictEqual(result.groups, [])
+  assert.deepStrictEqual(result.connections, [])
+
+  console.log("ok: empty fixture (ok === true, total === 0, not degraded)")
+}
+
 function checkMalformedJson() {
   var result = Model.parseStatusDocument("not json")
 
@@ -65,6 +80,7 @@ function checkMalformedJson() {
 
 checkHappyFixture()
 checkBadVersionFixture()
+checkEmptyFixture()
 checkMalformedJson()
 
 console.log("ok: all Model.js checks passed")
