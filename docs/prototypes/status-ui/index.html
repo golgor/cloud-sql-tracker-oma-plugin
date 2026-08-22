@@ -1,0 +1,988 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!--
+    PROTOTYPE — throwaway UI.
+    Answers Wayfinder #3: three Status panel + bar chrome directions.
+    Not production QML. Drive with golden Status JSON only.
+  -->
+  <title>PROTOTYPE — Cloud SQL Tracker UI styles</title>
+  <style>
+    :root {
+      --bg: #0f1115;
+      --bg-elev: #171a21;
+      --bg-soft: #1e2330;
+      --border: #2a3142;
+      --text: #e8ecf4;
+      --muted: #9aa3b5;
+      --dim: #6b7385;
+      --running: #3ecf8e;
+      --starting: #e0b34a;
+      --error: #f07178;
+      --stopped: #6b7385;
+      --accent: #7aa2f7;
+      --warn: #ff9e64;
+      --bar-bg: #12151c;
+      --shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
+      --radius: 12px;
+      --font: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+      --mono: "IBM Plex Mono", ui-monospace, monospace;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      min-height: 100%;
+      background:
+        radial-gradient(1200px 600px at 10% -10%, #1a2744 0%, transparent 55%),
+        radial-gradient(900px 500px at 90% 0%, #2a1a28 0%, transparent 50%),
+        var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+    }
+    body { padding: 28px 28px 110px; }
+    .banner {
+      max-width: 1100px;
+      margin: 0 auto 18px;
+      padding: 10px 14px;
+      border: 1px dashed #5a4630;
+      background: #2a2114;
+      color: #f0d9a8;
+      border-radius: 8px;
+      font-size: 13px;
+    }
+    .banner strong { color: #ffd79a; }
+    .stage {
+      max-width: 1100px;
+      margin: 0 auto;
+      display: grid;
+      gap: 18px;
+    }
+    .desktop {
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      background: linear-gradient(180deg, #141821, #0d1016 70%);
+      min-height: 640px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      position: relative;
+    }
+    .fake-desktop {
+      position: absolute;
+      inset: 0;
+      opacity: 0.35;
+      background-image:
+        linear-gradient(90deg, transparent 0 48px, rgba(255,255,255,0.02) 48px 49px),
+        linear-gradient(transparent 0 48px, rgba(255,255,255,0.02) 48px 49px);
+      background-size: 49px 49px;
+      pointer-events: none;
+    }
+    .topbar {
+      position: relative;
+      z-index: 2;
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 10px;
+      height: 38px;
+      padding: 0 12px;
+      background: rgba(10, 12, 16, 0.92);
+      border-bottom: 1px solid var(--border);
+      backdrop-filter: blur(8px);
+    }
+    .topbar .spacer { margin-right: auto; color: var(--dim); font-size: 12px; letter-spacing: 0.04em; }
+    .bar-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      height: 26px;
+      padding: 0 10px;
+      border-radius: 8px;
+      background: var(--bg-soft);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-size: 12px;
+      cursor: pointer;
+      user-select: none;
+    }
+    .bar-chip:hover { border-color: #3d4860; }
+    .bar-chip.warn {
+      border-color: rgba(240, 113, 120, 0.55);
+      box-shadow: inset 0 0 0 1px rgba(240, 113, 120, 0.15);
+    }
+    .bar-chip .dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--running);
+      box-shadow: 0 0 0 3px rgba(62, 207, 142, 0.15);
+    }
+    .bar-chip.warn .dot { background: var(--error); box-shadow: 0 0 0 3px rgba(240,113,120,0.18); }
+    .workspace {
+      position: relative;
+      z-index: 2;
+      padding: 28px;
+      min-height: 560px;
+      display: flex;
+      justify-content: flex-end;
+      align-items: flex-start;
+    }
+    .panel {
+      width: min(420px, 100%);
+      background: var(--bg-elev);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    .panel.wide { width: min(720px, 100%); }
+    .panel.ultra { width: min(860px, 100%); }
+    .panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(255,255,255,0.02);
+    }
+    .panel-head h1 {
+      margin: 0;
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+    }
+    .panel-head .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
+    .panel-body { padding: 12px 12px 14px; }
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+    .btn, button.btn {
+      appearance: none;
+      border: 1px solid var(--border);
+      background: var(--bg-soft);
+      color: var(--text);
+      border-radius: 8px;
+      padding: 6px 10px;
+      font: inherit;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .btn:hover { border-color: #44506a; }
+    .btn.primary { background: #243356; border-color: #3a5288; color: #d7e4ff; }
+    .btn.danger { background: #3a1f24; border-color: #7a3a44; color: #ffd0d4; }
+    .btn.ghost { background: transparent; }
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+    .seg {
+      display: inline-flex;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .seg button {
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      padding: 6px 10px;
+      font: inherit;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .seg button.active { background: var(--bg-soft); color: var(--text); }
+    .state-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-family: var(--mono);
+      border: 1px solid transparent;
+      text-transform: lowercase;
+    }
+    .state-pill::before {
+      content: "";
+      width: 7px; height: 7px; border-radius: 50%;
+      background: currentColor;
+    }
+    .s-running { color: #b8f5d5; background: rgba(62,207,142,0.12); border-color: rgba(62,207,142,0.25); }
+    .s-starting { color: #ffe2a3; background: rgba(224,179,74,0.12); border-color: rgba(224,179,74,0.28); }
+    .s-error { color: #ffc2c6; background: rgba(240,113,120,0.12); border-color: rgba(240,113,120,0.28); }
+    .s-stopped { color: #c2c8d4; background: rgba(107,115,133,0.14); border-color: rgba(107,115,133,0.28); }
+    .muted { color: var(--muted); }
+    .dim { color: var(--dim); }
+    .mono { font-family: var(--mono); font-size: 11px; }
+    .footer-note {
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px solid var(--border);
+      font-size: 11px;
+      color: var(--dim);
+    }
+    .action-log {
+      margin-top: 8px;
+      padding: 8px 10px;
+      border-radius: 8px;
+      background: #10131a;
+      border: 1px solid var(--border);
+      font-family: var(--mono);
+      font-size: 11px;
+      color: #c9d4ea;
+      min-height: 34px;
+    }
+
+    /* Variant A — grouped list */
+    .a-group { margin-bottom: 12px; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+    .a-group-h {
+      display: flex; align-items: center; gap: 8px;
+      padding: 8px 10px; background: #141925; border-bottom: 1px solid var(--border);
+    }
+    .a-group-h .name { font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; }
+    .a-group-h .counts { margin-left: auto; font-size: 11px; color: var(--muted); }
+    .a-group-h .bulk { display: flex; gap: 6px; }
+    .a-row {
+      display: grid;
+      grid-template-columns: 1fr auto auto;
+      gap: 10px;
+      align-items: center;
+      padding: 10px;
+      border-top: 1px solid rgba(42,49,66,0.65);
+    }
+    .a-row:first-child { border-top: 0; }
+    .a-row .title { font-size: 13px; }
+    .a-row .meta { font-size: 11px; color: var(--muted); margin-top: 2px; }
+    .toggle {
+      width: 40px; height: 22px; border-radius: 999px; border: 1px solid var(--border);
+      background: #232836; position: relative; cursor: pointer; padding: 0;
+    }
+    .toggle::after {
+      content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
+      border-radius: 50%; background: #c5ccda; transition: transform .15s ease, background .15s ease;
+    }
+    .toggle.on { background: rgba(62,207,142,0.25); border-color: rgba(62,207,142,0.45); }
+    .toggle.on::after { transform: translateX(18px); background: var(--running); }
+    .toggle.busy { opacity: 0.7; }
+    .toggle.err { background: rgba(240,113,120,0.18); border-color: rgba(240,113,120,0.4); }
+    .toggle.err::after { background: var(--error); }
+
+    /* Variant B — dense chips */
+    .b-panel .panel-body { padding-top: 10px; }
+    .b-toolbar {
+      display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px;
+      padding: 8px; border-radius: 10px; background: #121722; border: 1px solid var(--border);
+    }
+    .group-chip {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 6px 8px; border-radius: 999px; border: 1px solid var(--border);
+      background: var(--bg-soft); font-size: 12px;
+    }
+    .group-chip .label { font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; font-size: 11px; }
+    .group-chip .mini {
+      border: 0; background: #2a3348; color: var(--text); border-radius: 999px;
+      width: 22px; height: 22px; cursor: pointer; font-size: 12px; line-height: 1;
+    }
+    .group-chip .mini:hover { background: #364260; }
+    .group-chip .mini.stop { background: #3a2430; }
+    .pill-grid { display: flex; flex-wrap: wrap; gap: 8px; }
+    .conn-pill {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 8px 10px; border-radius: 999px; border: 1px solid var(--border);
+      background: #141a26; cursor: pointer; font-size: 12px;
+    }
+    .conn-pill:hover { border-color: #4a5878; }
+    .conn-pill .id { font-family: var(--mono); font-size: 11px; }
+    .conn-pill.selected { outline: 2px solid rgba(122,162,247,0.55); }
+    .b-detail {
+      margin-top: 12px; padding: 10px 12px; border-radius: 10px;
+      border: 1px dashed #3a4560; background: rgba(255,255,255,0.02); font-size: 12px;
+    }
+
+    /* Variant C — two pane */
+    .c-layout {
+      display: grid;
+      grid-template-columns: 220px 1fr;
+      min-height: 420px;
+    }
+    .c-side {
+      border-right: 1px solid var(--border);
+      background: #121722;
+      padding: 10px;
+    }
+    .c-side h2 {
+      margin: 0 0 8px; font-size: 11px; text-transform: uppercase;
+      letter-spacing: 0.08em; color: var(--dim);
+    }
+    .c-group {
+      width: 100%; text-align: left; border: 1px solid transparent;
+      background: transparent; color: var(--text); border-radius: 8px;
+      padding: 8px 10px; cursor: pointer; margin-bottom: 6px; font: inherit;
+    }
+    .c-group:hover { background: rgba(255,255,255,0.03); }
+    .c-group.active { background: #1c2538; border-color: #33466d; }
+    .c-group .row1 { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; font-weight: 600; }
+    .c-group .row2 { margin-top: 4px; font-size: 11px; color: var(--muted); }
+    .c-main { padding: 12px 14px; }
+    .c-summary {
+      display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 12px;
+    }
+    .stat {
+      padding: 8px; border-radius: 8px; background: #141a26; border: 1px solid var(--border);
+      text-align: center;
+    }
+    .stat .n { font-size: 18px; font-weight: 700; }
+    .stat .l { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+    .c-list { display: flex; flex-direction: column; gap: 8px; }
+    .c-card {
+      border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px;
+      background: #141a26; cursor: pointer;
+    }
+    .c-card.active { border-color: #4d66a0; box-shadow: inset 0 0 0 1px rgba(122,162,247,0.25); }
+    .c-card .top { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+    .c-card .name { font-size: 13px; font-weight: 600; }
+    .c-card .meta { margin-top: 4px; font-size: 11px; color: var(--muted); }
+    .c-detail {
+      margin-top: 12px; border-top: 1px solid var(--border); padding-top: 12px;
+    }
+    .c-detail h3 { margin: 0 0 6px; font-size: 14px; }
+    .kv { display: grid; grid-template-columns: 100px 1fr; gap: 4px 10px; font-size: 12px; margin: 10px 0; }
+    .kv dt { color: var(--dim); }
+    .kv dd { margin: 0; font-family: var(--mono); font-size: 11px; color: #d5dced; word-break: break-all; }
+    .c-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+    .empty {
+      padding: 28px 18px; text-align: center; color: var(--muted); font-size: 13px;
+      border: 1px dashed #3a4560; border-radius: 10px; background: rgba(255,255,255,0.015);
+    }
+    .empty h3 { margin: 0 0 8px; color: var(--text); font-size: 14px; }
+    .empty code { font-family: var(--mono); font-size: 11px; color: #d7e0f5; }
+
+    .switcher {
+      position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%);
+      z-index: 50; display: flex; align-items: center; gap: 10px;
+      padding: 10px 12px; border-radius: 999px;
+      background: #f4f6fb; color: #12141a; box-shadow: 0 10px 40px rgba(0,0,0,0.45);
+      border: 1px solid #fff; font-size: 13px; font-weight: 600;
+    }
+    .switcher button {
+      width: 34px; height: 34px; border-radius: 50%; border: 0;
+      background: #12141a; color: #fff; cursor: pointer; font-size: 16px;
+    }
+    .switcher .label { min-width: 210px; text-align: center; }
+    .switcher .hint { font-weight: 500; color: #5a6478; font-size: 11px; display: block; }
+
+    .legend {
+      max-width: 1100px; margin: 8px auto 0; color: var(--dim); font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <div class="banner">
+    <strong>PROTOTYPE / throwaway</strong> —
+    Three bar + panel styles for Cloud SQL Tracker (Wayfinder #3).
+    Fixture-driven only. Not production QML. Use ← → or the bottom bar to switch variants.
+  </div>
+
+  <div class="stage">
+    <div class="desktop" id="desktop">
+      <div class="fake-desktop"></div>
+      <div class="topbar" id="topbar"></div>
+      <div class="workspace" id="workspace"></div>
+    </div>
+    <div class="legend" id="legend"></div>
+  </div>
+
+  <div class="switcher" aria-label="Prototype variant switcher">
+    <button type="button" id="prev" title="Previous variant (←)">←</button>
+    <div class="label">
+      <span id="switchLabel">A</span>
+      <span class="hint">URL ?variant= · arrows when not typing</span>
+    </div>
+    <button type="button" id="next" title="Next variant (→)">→</button>
+  </div>
+
+  <script>
+    // PROTOTYPE throwaway — issue #3
+    const VARIANTS = [
+      { key: "A", name: "Grouped list" },
+      { key: "B", name: "Dense chips / toolbar" },
+      { key: "C", name: "Two-pane" }
+    ];
+
+    const GOLDEN = {
+      "version": 1,
+      "ts": "2026-08-20T19:45:00+02:00",
+      "cli_version": "0.1.0",
+      "running": 1,
+      "starting": 1,
+      "error": 2,
+      "stopped": 3,
+      "total": 7,
+      "groups": {
+        "backend": { "running": 1, "starting": 0, "error": 0, "stopped": 1, "total": 2 },
+        "fe": { "running": 0, "starting": 0, "error": 2, "stopped": 1, "total": 3 },
+        "iot": { "running": 0, "starting": 1, "error": 0, "stopped": 1, "total": 2 }
+      },
+      "connections": [
+        {
+          "id": "backend-dev", "name": "Backend Dev", "group": "backend",
+          "instance": "toolsense-dev:europe-west1:backend-postgres-1",
+          "address": "127.0.0.1", "port": 15432, "private_ip": false,
+          "state": "running", "source": "unit", "pid": 12001,
+          "unit": "cloud-sql-proxy-backend-dev.service", "port_open": true,
+          "uptime_sec": 7200, "error": null
+        },
+        {
+          "id": "backend-prod", "name": "Backend Prod", "group": "backend",
+          "instance": "toolsense:europe-west1:toolsense-3",
+          "address": "127.0.0.1", "port": 15433, "private_ip": false,
+          "state": "stopped", "source": "none", "pid": null,
+          "unit": "cloud-sql-proxy-backend-prod.service", "port_open": false,
+          "uptime_sec": null, "error": null
+        },
+        {
+          "id": "fe-dev", "name": "FE Dev", "group": "fe",
+          "instance": "toolsense-dev:europe-west1:toolsense-2",
+          "address": "127.0.0.1", "port": 15434, "private_ip": false,
+          "state": "error", "source": "none", "pid": null,
+          "unit": "cloud-sql-proxy-fe-dev.service", "port_open": true,
+          "uptime_sec": null,
+          "error": { "code": "port_in_use", "detail": "port 15434 held by cloud-sql-proxy (pid 12002) — not our unit; stop the leftover process manually" }
+        },
+        {
+          "id": "fe-prod", "name": "FE Prod", "group": "fe",
+          "instance": "toolsense:europe-west1:toolsense-2-replica-2",
+          "address": "127.0.0.1", "port": 15435, "private_ip": false,
+          "state": "error", "source": "none", "pid": null,
+          "unit": "cloud-sql-proxy-fe-prod.service", "port_open": true,
+          "uptime_sec": null,
+          "error": { "code": "port_in_use", "detail": "port 15435 held by docker-proxy (pid 9999)" }
+        },
+        {
+          "id": "fe-rw-prod", "name": "FE RW Prod", "group": "fe",
+          "instance": "toolsense:europe-west1:toolsense-2",
+          "address": "127.0.0.1", "port": 15436, "private_ip": false,
+          "state": "stopped", "source": "none", "pid": null,
+          "unit": "cloud-sql-proxy-fe-rw-prod.service", "port_open": false,
+          "uptime_sec": null, "error": null
+        },
+        {
+          "id": "iot-dev", "name": "IoT Dev", "group": "iot",
+          "instance": "toolsense-iot-dev:europe-west1:iot-mqtt-1",
+          "address": "127.0.0.1", "port": 15437, "private_ip": false,
+          "state": "starting", "source": "unit", "pid": 13001,
+          "unit": "cloud-sql-proxy-iot-dev.service", "port_open": false,
+          "uptime_sec": 3, "error": null
+        },
+        {
+          "id": "iot-prod", "name": "IoT Prod", "group": "iot",
+          "instance": "toolsense-iot:europe-west1:iot-mqtt-1",
+          "address": "127.0.0.1", "port": 15438, "private_ip": false,
+          "state": "stopped", "source": "none", "pid": null,
+          "unit": "cloud-sql-proxy-iot-prod.service", "port_open": false,
+          "uptime_sec": null, "error": null
+        }
+      ]
+    };
+
+    const EMPTY_DOC = {
+      version: 1, ts: new Date().toISOString(), cli_version: "0.1.0",
+      running: 0, starting: 0, error: 0, stopped: 0, total: 0,
+      groups: {}, connections: []
+    };
+
+    const state = {
+      variant: "A",
+      scenario: "happy", // happy | cli-missing | empty
+      panelOpen: true,
+      lastAction: "—",
+      selectedId: "backend-dev",
+      selectedGroup: "backend",
+      busyIds: new Set()
+    };
+
+    function $(id) { return document.getElementById(id); }
+
+    function getVariantIndex() {
+      return Math.max(0, VARIANTS.findIndex(v => v.key === state.variant));
+    }
+
+    function setVariant(key, pushUrl) {
+      const v = VARIANTS.find(x => x.key === key) || VARIANTS[0];
+      state.variant = v.key;
+      if (pushUrl !== false) {
+        const url = new URL(location.href);
+        url.searchParams.set("variant", v.key);
+        history.replaceState({}, "", url);
+      }
+      $("switchLabel").innerHTML = `${v.key} — ${v.name}`;
+      render();
+    }
+
+    function cycle(delta) {
+      const i = getVariantIndex();
+      const next = VARIANTS[(i + delta + VARIANTS.length) % VARIANTS.length];
+      setVariant(next.key);
+    }
+
+    function currentDoc() {
+      if (state.scenario === "empty") return EMPTY_DOC;
+      if (state.scenario === "cli-missing") return null;
+      return GOLDEN;
+    }
+
+    function groupOrder(doc) {
+      if (!doc) return [];
+      const keys = Object.keys(doc.groups || {});
+      const preferred = ["backend", "fe", "iot"];
+      return preferred.filter(k => keys.includes(k)).concat(keys.filter(k => !preferred.includes(k)));
+    }
+
+    function connsInGroup(doc, g) {
+      return (doc.connections || []).filter(c => c.group === g);
+    }
+
+    function stateClass(s) { return "state-pill s-" + s; }
+
+    function fmtUptime(sec) {
+      if (sec == null) return "—";
+      if (sec < 60) return sec + "s";
+      if (sec < 3600) return Math.floor(sec / 60) + "m";
+      return Math.floor(sec / 3600) + "h " + Math.floor((sec % 3600) / 60) + "m";
+    }
+
+    function logAction(msg) {
+      state.lastAction = msg;
+      const el = document.querySelector(".action-log");
+      if (el) el.textContent = "last action: " + msg;
+      else render();
+    }
+
+    function pretendToggle(conn) {
+      if (!conn) return;
+      if (conn.state === "error") {
+        logAction(`start ${conn.id} (stub) — row is error; real plugin would still try start/stop per product lock`);
+        return;
+      }
+      if (conn.state === "running" || conn.state === "starting") {
+        logAction(`stop ${conn.id} (stub)`);
+      } else {
+        logAction(`start ${conn.id} (stub)`);
+      }
+      state.busyIds.add(conn.id);
+      setTimeout(() => { state.busyIds.delete(conn.id); render(); }, 600);
+      render();
+    }
+
+    function pretendGroup(action, group) {
+      logAction(`${action} --group ${group} (stub)`);
+    }
+
+    function pretendAll(action) {
+      logAction(`${action} --all (stub)`);
+    }
+
+    function scenarioToolbar() {
+      return `
+        <div class="toolbar">
+          <div class="seg" role="tablist" aria-label="Data scenario">
+            <button type="button" data-scenario="happy" class="${state.scenario === "happy" ? "active" : ""}">Happy fixture</button>
+            <button type="button" data-scenario="cli-missing" class="${state.scenario === "cli-missing" ? "active" : ""}">CLI missing</button>
+            <button type="button" data-scenario="empty" class="${state.scenario === "empty" ? "active" : ""}">Empty config</button>
+          </div>
+          <button type="button" class="btn ghost" data-act="toggle-panel">${state.panelOpen ? "Close panel" : "Open panel"}</button>
+          <button type="button" class="btn danger" data-act="stop-all" ${state.scenario !== "happy" ? "disabled" : ""}>Stop all</button>
+        </div>`;
+    }
+
+    function bindCommon(root) {
+      root.querySelectorAll("[data-scenario]").forEach(btn => {
+        btn.addEventListener("click", () => {
+          state.scenario = btn.getAttribute("data-scenario");
+          logAction("scenario → " + state.scenario);
+          render();
+        });
+      });
+      root.querySelectorAll("[data-act=toggle-panel]").forEach(btn => {
+        btn.addEventListener("click", () => {
+          state.panelOpen = !state.panelOpen;
+          logAction(state.panelOpen ? "panel open" : "panel closed");
+          render();
+        });
+      });
+      root.querySelectorAll("[data-act=stop-all]").forEach(btn => {
+        btn.addEventListener("click", () => pretendAll("stop"));
+      });
+    }
+
+    function renderBar(doc) {
+      const warn = doc && doc.error > 0;
+      const label = !doc
+        ? "☁ !"
+        : warn
+          ? `☁ ${doc.running} ⚠${doc.error}`
+          : `☁ ${doc.running}`;
+      const tip = !doc
+        ? "cloud-sql-tracker not found"
+        : `running ${doc.running} · starting ${doc.starting} · error ${doc.error} · stopped ${doc.stopped}`;
+      return `
+        <div class="spacer">omarchy-shell · prototype desktop</div>
+        <button type="button" class="bar-chip ${warn || !doc ? "warn" : ""}" id="barButton" title="${tip}">
+          <span class="dot"></span>
+          <span>${label}</span>
+        </button>
+        <span class="dim mono" style="font-size:11px">clock</span>
+      `;
+    }
+
+    function emptyPanel(kind) {
+      if (kind === "cli") {
+        return `
+          <div class="empty">
+            <h3>CLI not found</h3>
+            <p>Put <code>cloud-sql-tracker</code> on PATH or set the widget <code>cliPath</code>.</p>
+            <p class="dim">Panel must not invent Connection state when the control plane is missing.</p>
+          </div>`;
+      }
+      return `
+        <div class="empty">
+          <h3>No connections</h3>
+          <p>Status document is empty. Edit <code>~/.config/cloud-sql-tracker/connections.json</code> (CLI-owned).</p>
+        </div>`;
+    }
+
+    /* ---------- Variant A ---------- */
+    function renderA(doc) {
+      if (!doc) {
+        return `<div class="panel"><div class="panel-head"><div><h1>Cloud SQL Tracker</h1><div class="sub">Grouped list</div></div></div><div class="panel-body">${scenarioToolbar()}${emptyPanel("cli")}<div class="action-log">last action: ${escapeHtml(state.lastAction)}</div></div></div>`;
+      }
+      if (doc.total === 0) {
+        return `<div class="panel"><div class="panel-head"><div><h1>Cloud SQL Tracker</h1><div class="sub">Grouped list</div></div></div><div class="panel-body">${scenarioToolbar()}${emptyPanel("empty")}<div class="action-log">last action: ${escapeHtml(state.lastAction)}</div></div></div>`;
+      }
+      const groupsHtml = groupOrder(doc).map(g => {
+        const gc = doc.groups[g];
+        const rows = connsInGroup(doc, g).map(c => {
+          const on = c.state === "running" || c.state === "starting";
+          const busy = state.busyIds.has(c.id);
+          const err = c.state === "error";
+          return `
+            <div class="a-row">
+              <div>
+                <div class="title">${escapeHtml(c.name)}</div>
+                <div class="meta mono">${escapeHtml(c.id)} · :${c.port}${c.error ? " · " + escapeHtml(c.error.code) : ""}</div>
+              </div>
+              <span class="${stateClass(c.state)}">${c.state}</span>
+              <button type="button" class="toggle ${on ? "on" : ""} ${busy ? "busy" : ""} ${err ? "err" : ""}"
+                data-toggle="${escapeHtml(c.id)}" title="Toggle ${escapeHtml(c.id)}" aria-label="Toggle ${escapeHtml(c.id)}"></button>
+            </div>`;
+        }).join("");
+        return `
+          <section class="a-group">
+            <div class="a-group-h">
+              <span class="name">${escapeHtml(g)}</span>
+              <span class="counts">${gc.running} run · ${gc.error} err · ${gc.total}</span>
+              <div class="bulk">
+                <button type="button" class="btn" data-g-start="${escapeHtml(g)}">Start</button>
+                <button type="button" class="btn" data-g-stop="${escapeHtml(g)}">Stop</button>
+              </div>
+            </div>
+            ${rows}
+          </section>`;
+      }).join("");
+
+      return `
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <h1>Cloud SQL Tracker</h1>
+              <div class="sub">Grouped list · ${doc.running}/${doc.total} running</div>
+            </div>
+            <span class="${doc.error ? stateClass("error") : stateClass("running")}">${doc.error ? doc.error + " errors" : "healthy"}</span>
+          </div>
+          <div class="panel-body">
+            ${scenarioToolbar()}
+            ${groupsHtml}
+            <div class="footer-note">Row toggle = start/stop that Connection. Group buttons bulk-target the group. Actions are stubs.</div>
+            <div class="action-log">last action: ${escapeHtml(state.lastAction)}</div>
+          </div>
+        </div>`;
+    }
+
+    function bindA(root, doc) {
+      bindCommon(root);
+      if (!doc) return;
+      root.querySelectorAll("[data-toggle]").forEach(btn => {
+        btn.addEventListener("click", () => {
+          const id = btn.getAttribute("data-toggle");
+          const c = doc.connections.find(x => x.id === id);
+          pretendToggle(c);
+        });
+      });
+      root.querySelectorAll("[data-g-start]").forEach(btn => {
+        btn.addEventListener("click", () => pretendGroup("start", btn.getAttribute("data-g-start")));
+      });
+      root.querySelectorAll("[data-g-stop]").forEach(btn => {
+        btn.addEventListener("click", () => pretendGroup("stop", btn.getAttribute("data-g-stop")));
+      });
+    }
+
+    /* ---------- Variant B ---------- */
+    function renderB(doc) {
+      if (!doc) {
+        return `<div class="panel b-panel"><div class="panel-head"><div><h1>Cloud SQL Tracker</h1><div class="sub">Dense chips</div></div></div><div class="panel-body">${scenarioToolbar()}${emptyPanel("cli")}<div class="action-log">last action: ${escapeHtml(state.lastAction)}</div></div></div>`;
+      }
+      if (doc.total === 0) {
+        return `<div class="panel b-panel"><div class="panel-head"><div><h1>Cloud SQL Tracker</h1><div class="sub">Dense chips</div></div></div><div class="panel-body">${scenarioToolbar()}${emptyPanel("empty")}<div class="action-log">last action: ${escapeHtml(state.lastAction)}</div></div></div>`;
+      }
+      const selected = doc.connections.find(c => c.id === state.selectedId) || doc.connections[0];
+      const groupChips = groupOrder(doc).map(g => {
+        const gc = doc.groups[g];
+        return `
+          <div class="group-chip" title="${g}: ${gc.running} running">
+            <span class="label">${escapeHtml(g)}</span>
+            <span class="dim mono">${gc.running}/${gc.total}</span>
+            <button type="button" class="mini" data-g-start="${escapeHtml(g)}" title="Start group">▶</button>
+            <button type="button" class="mini stop" data-g-stop="${escapeHtml(g)}" title="Stop group">■</button>
+          </div>`;
+      }).join("");
+
+      const pills = doc.connections.map(c => `
+        <button type="button" class="conn-pill ${selected && selected.id === c.id ? "selected" : ""}" data-select="${escapeHtml(c.id)}">
+          <span class="${stateClass(c.state)}">${c.state}</span>
+          <span class="id">${escapeHtml(c.id)}</span>
+        </button>`).join("");
+
+      const detail = selected ? `
+        <div class="b-detail">
+          <strong>${escapeHtml(selected.name)}</strong>
+          <div class="meta mono" style="margin-top:4px">${escapeHtml(selected.instance)}</div>
+          <div class="meta" style="margin-top:6px">port ${selected.port} · uptime ${fmtUptime(selected.uptime_sec)}${selected.error ? " · " + escapeHtml(selected.error.code) : ""}</div>
+          <div class="toolbar" style="margin:10px 0 0">
+            <button type="button" class="btn primary" data-toggle="${escapeHtml(selected.id)}">${(selected.state === "running" || selected.state === "starting") ? "Stop" : "Start"}</button>
+            <button type="button" class="btn" data-copy="${escapeHtml(selected.id)}">Copy id</button>
+          </div>
+          ${selected.error ? `<div class="meta" style="margin-top:8px;color:var(--error)">${escapeHtml(selected.error.detail || selected.error.code)}</div>` : ""}
+        </div>` : "";
+
+      return `
+        <div class="panel wide b-panel">
+          <div class="panel-head">
+            <div>
+              <h1>Cloud SQL Tracker</h1>
+              <div class="sub">Dense chips / toolbar · click a pill for detail</div>
+            </div>
+            <div class="mono dim">cli ${escapeHtml(doc.cli_version)}</div>
+          </div>
+          <div class="panel-body">
+            ${scenarioToolbar()}
+            <div class="b-toolbar">${groupChips}</div>
+            <div class="pill-grid">${pills}</div>
+            ${detail}
+            <div class="footer-note">Hierarchy is flat pills + group toolbar, not nested rows. Good when you mostly bulk-toggle groups.</div>
+            <div class="action-log">last action: ${escapeHtml(state.lastAction)}</div>
+          </div>
+        </div>`;
+    }
+
+    function bindB(root, doc) {
+      bindCommon(root);
+      if (!doc) return;
+      root.querySelectorAll("[data-select]").forEach(btn => {
+        btn.addEventListener("click", () => {
+          state.selectedId = btn.getAttribute("data-select");
+          logAction("select " + state.selectedId);
+          render();
+        });
+      });
+      root.querySelectorAll("[data-toggle]").forEach(btn => {
+        btn.addEventListener("click", () => {
+          const c = doc.connections.find(x => x.id === btn.getAttribute("data-toggle"));
+          pretendToggle(c);
+        });
+      });
+      root.querySelectorAll("[data-g-start]").forEach(btn => {
+        btn.addEventListener("click", () => pretendGroup("start", btn.getAttribute("data-g-start")));
+      });
+      root.querySelectorAll("[data-g-stop]").forEach(btn => {
+        btn.addEventListener("click", () => pretendGroup("stop", btn.getAttribute("data-g-stop")));
+      });
+      root.querySelectorAll("[data-copy]").forEach(btn => {
+        btn.addEventListener("click", () => logAction("copy id " + btn.getAttribute("data-copy") + " (stub)"));
+      });
+    }
+
+    /* ---------- Variant C ---------- */
+    function renderC(doc) {
+      if (!doc) {
+        return `<div class="panel ultra"><div class="panel-head"><div><h1>Cloud SQL Tracker</h1><div class="sub">Two-pane</div></div></div><div class="panel-body">${scenarioToolbar()}${emptyPanel("cli")}<div class="action-log">last action: ${escapeHtml(state.lastAction)}</div></div></div>`;
+      }
+      if (doc.total === 0) {
+        return `<div class="panel ultra"><div class="panel-head"><div><h1>Cloud SQL Tracker</h1><div class="sub">Two-pane</div></div></div><div class="panel-body">${scenarioToolbar()}${emptyPanel("empty")}<div class="action-log">last action: ${escapeHtml(state.lastAction)}</div></div></div>`;
+      }
+      if (!groupOrder(doc).includes(state.selectedGroup)) {
+        state.selectedGroup = groupOrder(doc)[0];
+      }
+      const side = groupOrder(doc).map(g => {
+        const gc = doc.groups[g];
+        return `
+          <button type="button" class="c-group ${state.selectedGroup === g ? "active" : ""}" data-group="${escapeHtml(g)}">
+            <div class="row1"><span>${escapeHtml(g)}</span><span class="mono">${gc.running}/${gc.total}</span></div>
+            <div class="row2">${gc.error ? gc.error + " error" : gc.starting ? gc.starting + " starting" : "ok"}</div>
+          </button>`;
+      }).join("");
+
+      const list = connsInGroup(doc, state.selectedGroup);
+      if (!list.find(c => c.id === state.selectedId) && list[0]) {
+        state.selectedId = list[0].id;
+      }
+      const selected = list.find(c => c.id === state.selectedId) || list[0];
+
+      const cards = list.map(c => `
+        <div class="c-card ${selected && selected.id === c.id ? "active" : ""}" data-select="${escapeHtml(c.id)}">
+          <div class="top">
+            <span class="name">${escapeHtml(c.name)}</span>
+            <span class="${stateClass(c.state)}">${c.state}</span>
+          </div>
+          <div class="meta mono">${escapeHtml(c.id)} · ${c.address}:${c.port}</div>
+        </div>`).join("");
+
+      const detail = selected ? `
+        <div class="c-detail">
+          <h3>${escapeHtml(selected.name)}</h3>
+          <dl class="kv">
+            <dt>id</dt><dd>${escapeHtml(selected.id)}</dd>
+            <dt>instance</dt><dd>${escapeHtml(selected.instance)}</dd>
+            <dt>unit</dt><dd>${escapeHtml(selected.unit || "—")}</dd>
+            <dt>source</dt><dd>${escapeHtml(selected.source)}</dd>
+            <dt>uptime</dt><dd>${fmtUptime(selected.uptime_sec)}</dd>
+            <dt>error</dt><dd>${selected.error ? escapeHtml(selected.error.code + " — " + (selected.error.detail || "")) : "—"}</dd>
+          </dl>
+          <div class="c-actions">
+            <button type="button" class="btn primary" data-toggle="${escapeHtml(selected.id)}">${(selected.state === "running" || selected.state === "starting") ? "Stop connection" : "Start connection"}</button>
+            <button type="button" class="btn" data-g-start="${escapeHtml(state.selectedGroup)}">Start group</button>
+            <button type="button" class="btn" data-g-stop="${escapeHtml(state.selectedGroup)}">Stop group</button>
+          </div>
+        </div>` : "";
+
+      return `
+        <div class="panel ultra">
+          <div class="panel-head">
+            <div>
+              <h1>Cloud SQL Tracker</h1>
+              <div class="sub">Two-pane · groups left, detail right</div>
+            </div>
+            <span class="mono dim">${escapeHtml(doc.ts)}</span>
+          </div>
+          ${scenarioToolbar().replace('class="toolbar"', 'class="toolbar" style="margin:12px 14px 0"')}
+          <div class="c-layout">
+            <aside class="c-side">
+              <h2>Groups</h2>
+              ${side}
+              <button type="button" class="btn" style="width:100%;margin-top:8px" data-act="stop-all">Stop all</button>
+            </aside>
+            <main class="c-main">
+              <div class="c-summary">
+                <div class="stat"><div class="n" style="color:var(--running)">${doc.running}</div><div class="l">running</div></div>
+                <div class="stat"><div class="n" style="color:var(--starting)">${doc.starting}</div><div class="l">starting</div></div>
+                <div class="stat"><div class="n" style="color:var(--error)">${doc.error}</div><div class="l">error</div></div>
+                <div class="stat"><div class="n" style="color:var(--stopped)">${doc.stopped}</div><div class="l">stopped</div></div>
+              </div>
+              <div class="c-list">${cards}</div>
+              ${detail}
+              <div class="footer-note">Inspector-style: pick group, pick Connection, act. Heavier but clearer for error detail.</div>
+              <div class="action-log">last action: ${escapeHtml(state.lastAction)}</div>
+            </main>
+          </div>
+        </div>`;
+    }
+
+    function bindC(root, doc) {
+      bindCommon(root);
+      if (!doc) return;
+      root.querySelectorAll("[data-group]").forEach(btn => {
+        btn.addEventListener("click", () => {
+          state.selectedGroup = btn.getAttribute("data-group");
+          const first = connsInGroup(doc, state.selectedGroup)[0];
+          if (first) state.selectedId = first.id;
+          logAction("group " + state.selectedGroup);
+          render();
+        });
+      });
+      root.querySelectorAll("[data-select]").forEach(btn => {
+        btn.addEventListener("click", () => {
+          state.selectedId = btn.getAttribute("data-select");
+          logAction("select " + state.selectedId);
+          render();
+        });
+      });
+      root.querySelectorAll("[data-toggle]").forEach(btn => {
+        btn.addEventListener("click", () => {
+          const c = doc.connections.find(x => x.id === btn.getAttribute("data-toggle"));
+          pretendToggle(c);
+        });
+      });
+      root.querySelectorAll("[data-g-start]").forEach(btn => {
+        btn.addEventListener("click", () => pretendGroup("start", btn.getAttribute("data-g-start")));
+      });
+      root.querySelectorAll("[data-g-stop]").forEach(btn => {
+        btn.addEventListener("click", () => pretendGroup("stop", btn.getAttribute("data-g-stop")));
+      });
+    }
+
+    function escapeHtml(s) {
+      return String(s)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function render() {
+      const doc = currentDoc();
+      $("topbar").innerHTML = renderBar(doc);
+      const ws = $("workspace");
+      if (!state.panelOpen) {
+        ws.innerHTML = `<div class="dim" style="margin:auto;font-size:13px">Panel closed — click the bar chip.</div>`;
+      } else if (state.variant === "A") {
+        ws.innerHTML = renderA(doc);
+        bindA(ws, doc);
+      } else if (state.variant === "B") {
+        ws.innerHTML = renderB(doc);
+        bindB(ws, doc);
+      } else {
+        ws.innerHTML = renderC(doc);
+        bindC(ws, doc);
+      }
+      const bar = $("barButton");
+      if (bar) {
+        bar.addEventListener("click", () => {
+          state.panelOpen = !state.panelOpen;
+          logAction(state.panelOpen ? "bar open" : "bar close");
+          render();
+        });
+      }
+      $("legend").textContent =
+        `Variant ${state.variant} · scenario=${state.scenario} · panelOpen=${state.panelOpen} · selected=${state.selectedId} · group=${state.selectedGroup}`;
+    }
+
+    function boot() {
+      const url = new URL(location.href);
+      const v = (url.searchParams.get("variant") || "A").toUpperCase();
+      setVariant(["A", "B", "C"].includes(v) ? v : "A", false);
+      $("prev").addEventListener("click", () => cycle(-1));
+      $("next").addEventListener("click", () => cycle(1));
+      window.addEventListener("keydown", (e) => {
+        const t = e.target;
+        const tag = t && t.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || (t && t.isContentEditable)) return;
+        if (e.key === "ArrowLeft") { e.preventDefault(); cycle(-1); }
+        if (e.key === "ArrowRight") { e.preventDefault(); cycle(1); }
+      });
+    }
+
+    boot();
+  </script>
+</body>
+</html>
