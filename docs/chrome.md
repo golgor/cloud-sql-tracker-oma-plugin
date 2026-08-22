@@ -362,11 +362,25 @@ click", and `cursorRing` derives from it — see the geometry rule below.
 
 ### The three positive signals
 
-1. **Optimistic knob throw.** The acting row's `checked` is the *target* state while
-   `busyKey` matches it, so the knob moves on click instead of waiting out the CLI
-   plus the 500ms `delayedRefresh`. Derive the target the same way `toggleConnection`
-   picks its verb. A failed action polls back to the unchanged state and the knob
-   returns — correct, not a glitch.
+1. **Intent, held until a document answers.** The switch shows what was *asked for*;
+   the state glyph (§2) shows what is *true*. Every command records its intent —
+   `{ id: bool }`, set for one Connection, a Group's worth, or all of them — and
+   `checked` reads that intent when present, falling back to the polled state
+   otherwise.
+
+   **Do not key this to `busy`.** `busy` ends when the CLI process *exits*, but the
+   fresh Status document does not arrive until `delayedRefresh` fires 500ms later. In
+   that gap `checked` falls back to the stale state, so a single click renders as
+   **On → Off → On**: three transitions for one action.
+
+   The first document to land while no action is in flight settles every intent,
+   whatever it says. It either confirms (knob stays, glyph goes live) or contradicts
+   (knob slides back — the operator's signal that the start or stop did not take).
+   Settling unconditionally also self-heals: an action Tracker's version gate refused
+   to run drops its intent on the next poll instead of leaving the knob stuck.
+
+   Reassign the intent map wholesale; mutating a `var` in place does not re-evaluate
+   bindings that read it.
 2. **Group spinner.** The acting Group's start button swaps to the spinner glyph and
    rotates. `busyKey` names the Group, not the verb, so there is nothing to attribute
    a separate spinner control to — and adding one would change the Row's extent.

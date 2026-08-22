@@ -279,7 +279,10 @@ Panel {
 
   // A poll can shorten the list under a live cursor (a Connection removed from
   // config, a Group emptied), so re-clamp whenever Tracker republishes.
-  onConnectionListChanged: Qt.callLater(root.clampCursor)
+  onConnectionListChanged: {
+    root.settleIntents()
+    Qt.callLater(root.clampCursor)
+  }
   onGroupListChanged: Qt.callLater(root.clampCursor)
   onDegradedChanged: Qt.callLater(root.clampCursor)
 
@@ -312,6 +315,53 @@ Panel {
     }
   }
 
+  // ---- Intent (chrome.md §5) ----------------------------------------------
+  //
+  // What the operator asked for, held until a Status document answers. The
+  // switch shows intent; the state glyph shows truth. Keying the optimistic
+  // value to `busy` instead does not work: busy ends when the CLI process
+  // exits, but the fresh document does not arrive until delayedRefresh fires
+  // 500ms later, so the knob falls back to the stale state and bounces
+  // On -> Off -> On for a single click.
+  //
+  // Reassigned wholesale rather than mutated, because mutating a var in place
+  // does not re-evaluate bindings that read it.
+  property var intents: ({})
+
+  function hasIntent(id) {
+    return Object.prototype.hasOwnProperty.call(root.intents, id)
+  }
+
+  function intentFor(id) {
+    return root.intents[id] === true
+  }
+
+  function setIntent(id, on) {
+    var next = {}
+    for (var k in root.intents) next[k] = root.intents[k]
+    next[id] = on
+    root.intents = next
+  }
+
+  function setIntentForList(list, on) {
+    var next = {}
+    for (var k in root.intents) next[k] = root.intents[k]
+    for (var i = 0; i < list.length; i++) next[list[i].id] = on
+    root.intents = next
+  }
+
+  // The first document to land once no action is in flight is the authority,
+  // whatever it says: it confirms the intent (glyph goes live, knob stays), or
+  // contradicts it (knob slides back, which is the operator's signal that the
+  // start or stop did not take). Also self-healing — an action that never ran,
+  // because Tracker's version gate refused it, drops its intent on the next
+  // poll rather than leaving the knob stuck.
+  function settleIntents() {
+    if (root.trackerBusy) return
+    if (Object.keys(root.intents).length === 0) return
+    root.intents = ({})
+  }
+
   // ---- Busy (chrome.md §5) ------------------------------------------------
   //
   // Tracker runs one action at a time: _runAction returns early and silently
@@ -329,16 +379,24 @@ Panel {
     return state === "stopped" || state === "error"
   }
 
+  // Every command records its intent first, so group and panel-wide actions
+  // throw their knobs as immediately as a single row does.
   function stopAll() {
-    if (root.tracker) root.tracker.stop({ kind: "all" })
+    if (!root.tracker) return
+    root.setIntentForList(root.connectionList, false)
+    root.tracker.stop({ kind: "all" })
   }
 
   function startGroup(name) {
-    if (root.tracker) root.tracker.start({ kind: "group", group: name })
+    if (!root.tracker) return
+    root.setIntentForList(root.connectionsForGroup(name), true)
+    root.tracker.start({ kind: "group", group: name })
   }
 
   function stopGroup(name) {
-    if (root.tracker) root.tracker.stop({ kind: "group", group: name })
+    if (!root.tracker) return
+    root.setIntentForList(root.connectionsForGroup(name), false)
+    root.tracker.stop({ kind: "group", group: name })
   }
 
   // The keyboard has one Enter where the mouse has two buttons, so Enter on a
@@ -353,7 +411,9 @@ Panel {
   // UI decides the verb; Tracker deliberately has no toggle().
   function toggleConnection(conn) {
     if (!root.tracker) return
-    if (root.canStart(conn.state)) root.tracker.start({ kind: "id", id: conn.id })
+    var on = root.canStart(conn.state)
+    root.setIntent(conn.id, on)
+    if (on) root.tracker.start({ kind: "id", id: conn.id })
     else root.tracker.stop({ kind: "id", id: conn.id })
   }
 
@@ -735,7 +795,6 @@ Panel {
     // Not `state`: QQuickItem already has one (the state-machine name), and
     // shadowing it is both a qmllint property-override and a real footgun.
     readonly property string healthState: row.conn.state
-    readonly property bool rowBusy: root.busyForKey("id:" + row.conn.id)
     readonly property string detail: root.errorDetail(row.conn)
 
     hasCursor: root.cursorActive && root.focusSection === row.section
@@ -839,16 +898,13 @@ Panel {
         id: toggle
         anchors.right: parent.right
         anchors.verticalCenter: parent.verticalCenter
-        // Optimistic while this row's own action is in flight, so the knob
-        // throws on click instead of sitting still until the next poll lands
-        // (delayedRefresh is 500ms *after* the CLI exits). Tracker has no
-        // optimistic state of its own, so the target state is derived the same
-        // way toggleConnection picks its verb. If the action fails, the next
-        // poll reports the unchanged state and the knob throws back — which is
-        // the correct outcome, not a glitch. ToggleSwitch documents this as the
-        // intended way to get an instant throw.
-        checked: row.rowBusy
-          ? root.canStart(row.healthState)
+        // Intent first, truth second: one clean slide on click, held until a
+        // Status document confirms it (knob stays, glyph goes live) or denies
+        // it (knob slides back). ToggleSwitch documents this as the intended
+        // way to get an instant throw — see root.intents for why `busy` is the
+        // wrong thing to key it on.
+        checked: root.hasIntent(row.conn.id)
+          ? root.intentFor(row.conn.id)
           : (row.healthState === "running" || row.healthState === "starting")
         // `busy`, not `interactive`. ToggleSwitch documents `interactive` as
         // "off when the surrounding row owns the click", and derives
