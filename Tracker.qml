@@ -27,7 +27,13 @@ Item {
 
   // A settings change may repoint cliPath or tighten minCliVersion — recheck
   // the version gate on the next refresh() instead of trusting a stale pass.
-  onSettingsChanged: _versionOk = false
+  // Also bumps _settingsGeneration so a versionProc already in flight against
+  // the *old* cliPath/minCliVersion cannot validate the *new* settings when
+  // it exits — see _checkVersion() and versionProc's handlers below.
+  onSettingsChanged: {
+    _versionOk = false
+    _settingsGeneration++
+  }
 
   // ---- View out (docs/modules.md "Tracker interface") ----------------------
 
@@ -57,15 +63,6 @@ Item {
   // degraded".
   property bool loaded: false
 
-  // Not in the docs/modules.md interface table: a short message from the
-  // last start/stop that failed at the CLI level (unknown id, no systemd
-  // bus, etc.) rather than as a per-connection Health state. The Status
-  // document has no field for "the action command itself failed", and the
-  // interface table has no slot for it either. Added here, minimally, so a
-  // failed action is not silent; flagged for reviewer / spec follow-up
-  // rather than assumed. Empty string when there is nothing to report.
-  property string lastActionError: ""
-
   // ---- Commands (docs/modules.md "Commands") --------------------------------
 
   // Run a status poll now (and the version gate first, when it has not
@@ -81,6 +78,11 @@ Item {
 
   // target: { kind: "id" | "group" | "all", id?, group? } — see
   // CONTEXT.md "Action target". No argv is built outside this module.
+  //
+  // Both gate on the version check (docs/modules.md "min CLI gate") having
+  // passed. Calling start()/stop() while _versionOk is false — CLI missing,
+  // too old, or not probed yet — is a clear no-op (logged, no Process
+  // launched) rather than driving a CLI we have not validated.
   function start(target) {
     _runAction("start", target)
   }
@@ -188,6 +190,7 @@ Item {
   function _checkVersion() {
     if (versionProc.running) return
     _versionExited = false
+    _versionProcGeneration = root._settingsGeneration
     versionProc.command = [root.cliPath, "--version"]
     versionProc.running = true
   }
@@ -201,12 +204,16 @@ Item {
 
   function _runAction(verb, target) {
     if (actionProc.running) return
+    if (!root._versionOk) {
+      console.warn("Tracker: ignoring " + verb + " — version gate has not passed (degraded: " +
+        (root.degraded ? root.degraded.kind : "not yet checked") + ").")
+      return
+    }
     var args = _targetArgs(target)
     if (args === null) {
       console.warn("Tracker: invalid action target for " + verb + ":", JSON.stringify(target))
       return
     }
-    root.lastActionError = ""
     root.busyKey = _targetKey(target)
     _actionExited = false
     actionProc.command = [root.cliPath, verb].concat(args)
@@ -220,6 +227,15 @@ Item {
   property bool _versionExited: true
   property bool _statusExited: true
   property bool _actionExited: true
+
+  // Bumped by onSettingsChanged. _versionProcGeneration captures the value
+  // at the moment a versionProc launch is kicked off, so its exit handlers
+  // can tell a stale in-flight probe (started against a cliPath/
+  // minCliVersion that settings has since replaced) from a current one, and
+  // ignore the former instead of validating the new settings with an old
+  // process's result.
+  property int _settingsGeneration: 0
+  property int _versionProcGeneration: -1
 
   function _missingCliMessage() {
     return "Could not run '" + root.cliPath + "'. Check the cliPath setting or your PATH."
@@ -256,6 +272,13 @@ Item {
     stderr: StdioCollector { id: versionStderr; waitForEnd: true }
     onExited: function (exitCode) {
       root._versionExited = true
+      if (root._versionProcGeneration !== root._settingsGeneration) {
+        // Settings (cliPath/minCliVersion) changed while this probe was in
+        // flight. Its result no longer applies — do not let a stale pass or
+        // fail decide _versionOk/degraded for the *current* settings. The
+        // next refresh() (poll tick or explicit call) starts a fresh probe.
+        return
+      }
       root.loaded = true
       if (exitCode !== 0) {
         var err = String(versionStderr.text || "").trim()
@@ -274,6 +297,7 @@ Item {
     onRunningChanged: {
       if (!running && !root._versionExited) {
         root._versionExited = true
+        if (root._versionProcGeneration !== root._settingsGeneration) return
         root.loaded = true
         root._setDegraded("cli_missing", root._missingCliMessage())
       }
@@ -326,7 +350,8 @@ Item {
       if (exitCode !== 0) {
         var out = String(actionStdout.text || "").trim()
         var err = String(actionStderr.text || "").trim()
-        root.lastActionError = err !== "" ? err : (out !== "" ? out : ("Command exited with code " + exitCode + "."))
+        console.warn("Tracker: action exited with code " + exitCode + ":",
+          err !== "" ? err : (out !== "" ? out : "(no output)"))
       }
       delayedRefresh.restart()
     }
@@ -334,7 +359,7 @@ Item {
       if (!running && !root._actionExited) {
         root._actionExited = true
         root.busyKey = ""
-        root.lastActionError = root._missingCliMessage()
+        console.warn("Tracker: " + root._missingCliMessage())
         delayedRefresh.restart()
       }
     }
