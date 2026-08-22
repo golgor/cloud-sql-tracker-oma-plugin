@@ -86,7 +86,14 @@ BarWidget {
     // Icon + running count, per DESIGN.md "Bar". `active` drives this
     // codebase's existing warning affordance (activeColor → bar.urgent,
     // e.g. Microphone.qml's "in use" highlight) — no separate glyph needed.
-    text: "☁ " + root.tracker.runningCount
+    //
+    // The glyph is nf-md-cloud (U+F015F), written as a literal character.
+    // It must come from the Nerd Font MDI range, which is the family
+    // `fc-match monospace` resolves to and therefore the family drawing the
+    // count beside it: the previous ☁ (U+2601) is outside that range and
+    // resolved to Noto Sans CJK JP here — a different family from its own
+    // count, and tofu on any machine without Noto CJK. docs/chrome.md §8.
+    text: "󰅟 " + root.tracker.runningCount
     active: root.tracker.degraded !== null || root.tracker.errorCount > 0
     tooltipText: root._tooltipText
     fixedWidth: root.bar && root.bar.vertical ? -1 : Style.space(27)

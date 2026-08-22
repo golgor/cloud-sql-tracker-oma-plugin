@@ -268,7 +268,7 @@ FE                     0/3 · 2 err   󰐊  󰓛
 
 | Element | Spec |
 |---------|------|
-| Label | `PanelSectionHeader`, group name **uppercased** |
+| Label | `PanelSectionHeader`, group name **uppercased**. Note it dims itself with `Qt.darker(foreground, 1.4)` internally — the §1 light-theme inversion is baked in, as with `PanelHero.meta`; accept it for consistency rather than forking the component |
 | Counts | Right-aligned, `Style.font.caption`, `alpha(fg, 0.5)`. `"<running>/<total>"`, `+ " · <n> err"` when `error > 0` |
 | Start | `PanelActionButton`, `U+F040A`, tooltip `"Start group"` |
 | Stop | `PanelActionButton`, `U+F04DB`, tooltip `"Stop group"` |
@@ -281,7 +281,8 @@ pointer handling of its own:
 |----------|-------|
 | `hasCursor` | `cursorActive && focusSection === "group:<g>" && selectedIndex === -1` |
 | `current` | `false` — reserve the persistent fill for `running` rows (§2) |
-| Action button `visible` | `hasCursor \|\| headerMouse.containsMouse` |
+| Action button reveal | `opacity: hasCursor ? 1 : 0` on the enclosing `Row`, **never `visible`** — see §5 "Geometry stability" |
+| Action button input gate | `enabled: revealed && !tracker.busy` — opacity-0 items still take clicks |
 
 Its `MouseArea` sets `cursorActive = true`, `focusSection = "group:<g>"`,
 `selectedIndex = -1` on hover, exactly as the row's does — that shared write is what
@@ -338,28 +339,63 @@ verb; `Tracker` deliberately has no `toggle()` (`docs/modules.md`).
 
 ## 5 · Busy
 
-`Tracker` runs **one action at a time**: `_runAction` returns early and silently when
-`actionProc.running`. A control that stays enabled during another action is therefore
-a **dead click** — it looks live, does nothing, says nothing.
+`Tracker` runs **one action at a time**: `_runAction` returns early and silently
+when `actionProc.running`. So a control that stays live during another action is a
+**dead click** — it looks active and does nothing.
 
-> **Rule.** While `tracker.busy` is true, **every** action control is disabled — not
-> only the one whose key is in flight. The `busyKey` target additionally shows the
-> spinner. Disabled says "the panel is working"; the spinner says "this is the thing
-> it is working on".
+> **Rule.** While `tracker.busy`, every action control **stops accepting clicks**.
+> But **nothing dims.** An action is a sub-second CLI round trip; dimming every idle
+> control for its duration reads as the whole panel flashing on every toggle.
+> `ToggleSwitch` makes the same point about its own `busy`: it *"swallows further
+> clicks, but leaves hover, cursor, and tooltips alone so the control does not
+> flicker."* Feedback comes from the three positive signals below, not from taking
+> the panel away.
 
-| Control | Disabled while | Spinner while |
-|---------|----------------|---------------|
-| Row `ToggleSwitch` | `tracker.busy` | `busyKey === "id:" + id` |
-| Group start / stop | `tracker.busy` | `busyKey === "group:" + name` |
-| `Stop all` | `tracker.busy` | `busyKey === "all"` |
+| Control | Blocks clicks via | Visually silent when blocked? |
+|---------|-------------------|-------------------------------|
+| Row `ToggleSwitch` | `busy: tracker.busy` | Yes — `busy` gates only `onClicked` |
+| Group start / stop | `enabled` | Yes — the Row sits at `opacity: 0` unless revealed |
+| `Stop all` | `enabled` | Yes — `Button` colours derive from `selected`/`foreground`, never `enabled` |
+
+**Never `ToggleSwitch.interactive` for this.** It means "the surrounding row owns the
+click", and `cursorRing` derives from it — see the geometry rule below.
+
+### The three positive signals
+
+1. **Optimistic knob throw.** The acting row's `checked` is the *target* state while
+   `busyKey` matches it, so the knob moves on click instead of waiting out the CLI
+   plus the 500ms `delayedRefresh`. Derive the target the same way `toggleConnection`
+   picks its verb. A failed action polls back to the unchanged state and the knob
+   returns — correct, not a glitch.
+2. **Group spinner.** The acting Group's start button swaps to the spinner glyph and
+   rotates. `busyKey` names the Group, not the verb, so there is nothing to attribute
+   a separate spinner control to — and adding one would change the Row's extent.
+3. **`starting` state.** Once the poll lands, the Connection reports `starting` and
+   its glyph spins (§2) — the durable signal the other two bridge to.
+
+### Geometry stability
+
+Three of this kit's components change their **implicit size** when a state property
+flips. Bind any of them to a transient state and the panel visibly jumps:
+
+| Trap | Mechanism | Effect |
+|------|-----------|--------|
+| `ToggleSwitch.interactive` | `cursorRing: interactive`, `_pad: cursorRing ? cursorPad : 0`, `implicitWidth: trackWidth + _pad*2` | Switch shrinks `54×34` → `42×22` |
+| `visible` on a reveal inside a `Row` | `Row` skips invisible children entirely | Row collapses: header height jumps, siblings anchored to its edge slide |
+| `Button.iconText` `""` → glyph | Icon `Text` is `visible: iconText !== ""` inside a Row with `controlGap` | Button widens, moving `PanelHero.trailingInset` and reflowing the title |
+
+> **Rule.** Never bind a geometry-affecting property to a transient state — busy,
+> hover, or cursor. Reveal with **`opacity`** and gate input with **`enabled`**
+> (opacity-0 items still take mouse input, so both are needed). `enabled` is safe on
+> every control here: none of their implicit sizes depend on it.
+
+Not affected, and safe to swap freely: `PanelActionButton.iconText`
+(`implicitWidth: size`, independent of content), and `PanelToolTip.visible`
+(a popup, never in layout).
 
 `busyKey` shapes are `"id:<id>"`, `"group:<name>"`, `"all"` — opaque to the UI beyond
-string identity. Disabled controls sit at `opacity 0.55`.
-
-Rows are never removed or re-ordered while busy: `Tracker` keeps the last good view
-(`_hasGoodDocument`), so the switchboard stays stable under the cursor.
-
----
+string identity. Rows are never removed or re-ordered while busy: `Tracker` keeps the
+last good view (`_hasGoodDocument`), so the switchboard stays stable under the cursor.
 
 ## 6 · Keyboard
 
