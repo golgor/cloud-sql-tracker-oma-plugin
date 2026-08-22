@@ -56,7 +56,7 @@ Single scrollable column (not two-pane in v1):
 
 #### Amendments — chrome pass
 
-The list above predates the chrome pass. These four points supersede it:
+The list above predates the chrome pass. These six points supersede it:
 
 - **Panel size is `Style.space(380) × Style.space(560)`** — the shell's default for
   list panels (7 of 10 native panels use 380). The original `340 × 420` was narrower
@@ -68,6 +68,18 @@ The list above predates the chrome pass. These four points supersede it:
 - **`Stop all` stays one-way.** Native panels put a symmetric on/off switch in the
   header, but "start every Connection" means N proxy processes and N GCP auth
   handshakes from one click. The asymmetry is a safety property, not an oversight.
+- **Busy blocks every control's clicks, but dims nothing.** Point 3 above said "do not
+  block the whole panel harder than necessary"; in practice Tracker runs one action at
+  a time and ignores a concurrent one silently, so leaving other controls live means
+  dead clicks. Blocking them all is therefore right — but *dimming* them all is not:
+  an action is a sub-second CLI round trip, so it reads as the whole panel flashing on
+  every toggle. Feedback comes instead from the switch showing **intent** (it slides on
+  click and holds until a Status document confirms or denies it), a spinner on the
+  acting Group, and the `starting` Health state once the poll lands. Detail:
+  [`chrome.md`](./chrome.md) §5.
+- **The cursor survives close/reopen.** Reopening re-activates it where it was left, so
+  toggling the same Connection again costs one `Enter`. Session-scoped only: the
+  cursor lives in the Panel object, and this plugin still writes **no** state to disk.
 
 ### Connection row detail (inline, not a second pane)
 

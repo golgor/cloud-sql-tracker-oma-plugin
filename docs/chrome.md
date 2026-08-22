@@ -484,31 +484,6 @@ are the same row.)
   Session-scoped: no state file is involved, and this plugin owns none by design. A
   shell restart starts cold.
 
-- **Degraded, and empty (`total === 0`)**: **no cursor targets at all** in either
-  case. `"header"` *is* the `Stop all` button, and that is hidden whenever
-  `degraded !== null || total === 0` — so there is nothing to land on and no rows
-  either. `j`/`k`/`h`/`l`/`Enter` are all no-ops; `Esc` and `Tab` still work, and
-  `cursorActive` stays `false` so no highlight is ever painted.
-- Clamp on every model change — a poll can shorten the list under a live cursor.
-- **The cursor is remembered across close/reopen.** Reopening restores the position
-  of the last *action*, with the highlight already visible, so the common loop —
-  open, toggle the Connection you care about, close, return later to toggle it back —
-  costs one `Enter` rather than navigating to it again. Restore then clamp, since the
-  remembered target may be gone. Nothing remembered yet (first open after a shell
-  start) falls back to the house behaviour: no highlight until the keyboard or mouse
-  arrives.
-
-  Remember the last **acted-on** target, not the last cursor position: hovering writes
-  the cursor too, so a mouse leaving the panel would otherwise remember whatever row
-  it exited through. Every command records an intent (§5), which makes
-  `setIntent`/`setIntentForList` the one place where "an action was just taken" is
-  unambiguously true — and at that moment the cursor is already on the target in every
-  path, because the mouse handlers set it on hover before the click and the keyboard
-  paths require it.
-
-  Session-scoped: it lives in the Panel, which `BarWidget`'s `Loader` keeps alive
-  across open/close, so no state file is involved — this plugin owns none by design.
-  A shell restart forgets it.
 - `ListView` with `ScrollBar.AsNeeded`; `positionViewAtIndex(i, ListView.Contain)` on
   cursor move so `Contain` only scrolls when the row is actually clipped, and never
   lurches under a hovering mouse.
@@ -618,8 +593,34 @@ the moment a theme customises them.
    chrome work, and these checks passing is the proof.
 2. [`docs/prototypes/theme-sweep`](./prototypes/theme-sweep/) — re-check §1 and §2
    whenever a token mapping or glyph changes.
-3. `omarchy plugin validate` via `./scripts/dev-link`.
-4. Live: all four `degraded.kind` bodies, the empty body, and all four Health states.
+3. `omarchy plugin validate` via `./scripts/dev-link`. Note that saved edits do
+   **not** hot-reload through the symlink — run `omarchy restart shell` after each
+   change, or you will be reviewing the previous build.
+4. **`qmllint` — use the Qt 6 binary explicitly.** On Arch, `/usr/bin/qmllint` comes
+   from `qt5-declarative` and silently reports *nothing* on Qt 6 QML: it exits 0 on a
+   deliberate syntax error and on an unresolved type, so it reads as a clean pass.
+   Use `/usr/lib/qt6/bin/qmllint` (check `--version` names a Qt 6 release), and give
+   it the shell's modules under their real URIs — `qs.Ui` resolves as `qs/Ui`, so a
+   symlink shim is needed:
+
+   ```bash
+   mkdir -p /tmp/qmlshim/qs
+   ln -sfn /usr/share/omarchy/shell/Ui      /tmp/qmlshim/qs/Ui
+   ln -sfn /usr/share/omarchy/shell/Commons /tmp/qmlshim/qs/Commons
+   /usr/lib/qt6/bin/qmllint -I /tmp/qmlshim -I /usr/lib/qt6/qml Panel.qml
+   ```
+
+   Judge the result against the shipped panels rather than against zero: they produce
+   71–198 warnings under the same command, essentially all `unqualified` (`root.*`
+   from nested Components, which wants a `pragma ComponentBehavior: Bound` this
+   codebase uses nowhere) and `missing-property` (`Style.font.*` / `Style.spacing.*`
+   are anonymous `QtObject`s qmllint cannot introspect). What must stay at **zero** is
+   `property-override`, `unresolved-type`, and `Could not find property`.
+5. Live: all four `degraded.kind` bodies, the empty body, and all four Health states.
    `fixtures/` covers happy / empty / bad-version.
-5. Keyboard: reach every control with `j`/`k`/`h`/`l`/`Enter` and confirm exactly one
-   highlight is ever visible.
+6. Keyboard: reach every control with `j`/`k`/`h`/`l`/`Enter` and confirm exactly one
+   highlight is ever visible. This cannot be automated — `KeyboardPanel` takes a
+   layer-shell keyboard grab that `wtype`'s virtual-keyboard protocol does not feed,
+   so synthetic keys land in whatever window had focus instead.
+7. Geometry: perform an action and confirm **nothing moves** — no row changes height,
+   no control changes size, no label shifts sideways (§5 "Geometry stability").
