@@ -466,6 +466,25 @@ are the same row.)
   either. `j`/`k`/`h`/`l`/`Enter` are all no-ops; `Esc` and `Tab` still work, and
   `cursorActive` stays `false` so no highlight is ever painted.
 - Clamp on every model change — a poll can shorten the list under a live cursor.
+- **The cursor is remembered across close/reopen.** Reopening restores the position
+  of the last *action*, with the highlight already visible, so the common loop —
+  open, toggle the Connection you care about, close, return later to toggle it back —
+  costs one `Enter` rather than navigating to it again. Restore then clamp, since the
+  remembered target may be gone. Nothing remembered yet (first open after a shell
+  start) falls back to the house behaviour: no highlight until the keyboard or mouse
+  arrives.
+
+  Remember the last **acted-on** target, not the last cursor position: hovering writes
+  the cursor too, so a mouse leaving the panel would otherwise remember whatever row
+  it exited through. Every command records an intent (§5), which makes
+  `setIntent`/`setIntentForList` the one place where "an action was just taken" is
+  unambiguously true — and at that moment the cursor is already on the target in every
+  path, because the mouse handlers set it on hover before the click and the keyboard
+  paths require it.
+
+  Session-scoped: it lives in the Panel, which `BarWidget`'s `Loader` keeps alive
+  across open/close, so no state file is involved — this plugin owns none by design.
+  A shell restart forgets it.
 - `ListView` with `ScrollBar.AsNeeded`; `positionViewAtIndex(i, ListView.Contain)` on
   cursor move so `Contain` only scrolls when the row is actually clipped, and never
   lurches under a hovering mouse.

@@ -306,6 +306,44 @@ Panel {
   onGroupListChanged: Qt.callLater(root.clampCursor)
   onDegradedChanged: Qt.callLater(root.clampCursor)
 
+  // Where the operator last *acted*. Restored on reopen, so the common loop —
+  // open, toggle the one Connection you care about, close, come back later to
+  // toggle it off — costs a single Enter instead of navigating back to it.
+  //
+  // Deliberately the last acted-on target, not the last cursor position:
+  // hovering writes the cursor too, so a mouse leaving the panel would
+  // otherwise "remember" whatever row it happened to exit through.
+  //
+  // Session-scoped. It lives in this Panel, which BarWidget's Loader keeps
+  // alive across open/close, so no state file is involved — the plugin owns
+  // none by design (DESIGN.md). A shell restart forgets it.
+  property string lastSection: ""
+  property int lastIndex: -1
+  property bool hasLastCursor: false
+
+  // Every command records an intent, so setIntent/setIntentForList are the one
+  // place where "an action was just taken" is unambiguously true. At that
+  // moment the cursor is already on the target in every path: mouse handlers
+  // set it on hover before the click, and the keyboard paths require it.
+  function rememberCursor() {
+    if (root.focusSection === "") return
+    root.lastSection = root.focusSection
+    root.lastIndex = root.selectedIndex
+    root.hasLastCursor = true
+  }
+
+  // Restore, then clamp: the remembered target may be gone (Connection dropped
+  // from config, Group emptied, Tracker now degraded), and clampCursor already
+  // knows how to repair or stand down. Nothing remembered yet means the house
+  // behaviour — no highlight until the keyboard or mouse arrives.
+  function restoreCursor() {
+    if (!root.hasLastCursor) { root.resetCursor(); return }
+    root.cursorActive = true
+    root.focusSection = root.lastSection
+    root.selectedIndex = root.lastIndex
+    root.clampCursor()
+  }
+
   function resetCursor() {
     root.cursorActive = false
     root.focusSection = ""
@@ -330,7 +368,7 @@ Panel {
   // restart a countdown already in flight.
   onOpenedChanged: {
     if (opened) {
-      root.resetCursor()
+      root.restoreCursor()
       if (root.tracker) root.tracker.refresh()
     }
   }
@@ -357,6 +395,7 @@ Panel {
   }
 
   function setIntent(id, on) {
+    root.rememberCursor()
     var next = {}
     for (var k in root.intents) next[k] = root.intents[k]
     next[id] = on
@@ -364,6 +403,7 @@ Panel {
   }
 
   function setIntentForList(list, on) {
+    root.rememberCursor()
     var next = {}
     for (var k in root.intents) next[k] = root.intents[k]
     for (var i = 0; i < list.length; i++) next[list[i].id] = on
