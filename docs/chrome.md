@@ -466,6 +466,30 @@ are the same row.)
   either. `j`/`k`/`h`/`l`/`Enter` are all no-ops; `Esc` and `Tab` still work, and
   `cursorActive` stays `false` so no highlight is ever painted.
 - Clamp on every model change — a poll can shorten the list under a live cursor.
+- **The cursor is remembered across close/reopen.** Reopening re-activates the cursor
+  where it was left — including a position reached by `j`/`k` without acting — so the
+  common loop (open, toggle the Connection you care about, close, return later to
+  toggle it back) costs one `Enter`. First open after a shell start keeps the house
+  behaviour: no highlight until the keyboard or mouse arrives.
+
+  **Keep exactly one copy of this state.** The cursor properties live on the Panel,
+  and `BarWidget`'s `Loader` is `active: true` with no dynamic binding, so the object
+  is constructed once and survives every open/close — verified by instrumenting
+  `Component.onCompleted`, which fires once per shell start with no matching
+  `onDestruction`. Reopening therefore only has to re-activate what is already there
+  and re-clamp it. A separate "last position" pair updated on each *action* both
+  duplicates the state and fails the requirement, because moving the cursor without
+  acting leaves the copy pointing at the previous row.
+
+  Session-scoped: no state file is involved, and this plugin owns none by design. A
+  shell restart starts cold.
+
+- **Degraded, and empty (`total === 0`)**: **no cursor targets at all** in either
+  case. `"header"` *is* the `Stop all` button, and that is hidden whenever
+  `degraded !== null || total === 0` — so there is nothing to land on and no rows
+  either. `j`/`k`/`h`/`l`/`Enter` are all no-ops; `Esc` and `Tab` still work, and
+  `cursorActive` stays `false` so no highlight is ever painted.
+- Clamp on every model change — a poll can shorten the list under a live cursor.
 - **The cursor is remembered across close/reopen.** Reopening restores the position
   of the last *action*, with the highlight already visible, so the common loop —
   open, toggle the Connection you care about, close, return later to toggle it back —
