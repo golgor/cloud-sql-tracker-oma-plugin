@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<!--
+  PROTOTYPE / THROWAWAY — verification harness, not production QML.
+  Purpose: confirm the four health-state glyphs render correctly in the
+  resolved Nerd Font, and prove the state system survives every installed
+  Omarchy palette (including kanagawa's accent==foreground collapse and the
+  five light-foreground themes).
+  Palettes below are a faithful port of Commons/Color.qml loadColors(),
+  fallback chain included. Inlined, not fetched — file:// blocks fetch.
+-->
+<title>Cloud SQL Tracker — glyph + theme sweep</title>
+<style>
+  :root {
+    --ink: #e8ecf4; --dim: #9aa3b5; --faint: #6b7385;
+    --page: #0f1115; --card: #171a21; --edge: #2a3142;
+    --mono: "JetBrainsMono Nerd Font", "JetBrainsMono NF", ui-monospace, monospace;
+    --ui: "IBM Plex Sans", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:24px 24px 80px; background:var(--page); color:var(--ink); font-family:var(--ui); }
+  .banner { max-width:1180px; margin:0 auto 20px; padding:10px 14px; border:1px dashed #5a4630;
+            background:#2a2114; color:#f0d9a8; border-radius:8px; font-size:13px; }
+  .banner b { color:#ffd79a; }
+  .wrap { max-width:1180px; margin:0 auto; }
+  h2 { font-size:15px; margin:30px 0 4px; letter-spacing:.02em; }
+  h2 .n { color:var(--faint); font-family:var(--mono); margin-right:8px; }
+  .lede { color:var(--dim); font-size:13px; margin:0 0 14px; max-width:76ch; line-height:1.5; }
+  .card { background:var(--card); border:1px solid var(--edge); border-radius:12px; padding:16px; }
+  code { font-family:var(--mono); font-size:12px; color:#d7e0f5; }
+
+  /* ---- glyph pickers ---- */
+  .gp { display:flex; flex-wrap:wrap; gap:8px; }
+  .cand { border:1px solid var(--edge); background:#141a26; border-radius:10px; padding:8px 10px;
+          cursor:pointer; text-align:center; min-width:78px; }
+  .cand:hover { border-color:#4a5878; }
+  .cand.sel { border-color:#7aa2f7; box-shadow:inset 0 0 0 1px rgba(122,162,247,.35); background:#1a2234; }
+  .cand .gl { font-family:var(--mono); font-size:26px; line-height:1.25; display:block; }
+  .cand .gl2 { font-family:var(--mono); font-size:26px; line-height:1.25; display:block; letter-spacing:6px; }
+  .cand .cp { font-family:var(--mono); font-size:9.5px; color:var(--faint); display:block; margin-top:3px; }
+
+  /* ---- panel mock: real Style.qml numbers at fontBaseSize 12 ---- */
+  .sweep { display:grid; grid-template-columns:repeat(auto-fill, minmax(408px,1fr)); gap:14px; }
+  .theme { border:1px solid var(--edge); border-radius:12px; overflow:hidden; }
+  .theme > .tname { display:flex; align-items:center; gap:8px; padding:7px 11px; background:#11141b;
+                    border-bottom:1px solid var(--edge); font-size:11.5px; color:var(--dim);
+                    font-family:var(--mono); }
+  .tag { font-size:9px; padding:1px 6px; border-radius:99px; border:1px solid; letter-spacing:.05em; }
+  .tag.light { color:#ffe2a3; border-color:#6a5628; background:#2a2114; }
+  .tag.collapse { color:#ffc2c6; border-color:#7a3a44; background:#2e1b1f; }
+  .swatches { display:flex; gap:3px; margin-left:auto; }
+  .swatches i { width:11px; height:11px; border-radius:3px; display:block; border:1px solid rgba(255,255,255,.14); }
+
+  .panel { padding:14px; }                 /* Style.spacing.popupPadding = 14 */
+  .pw { width:380px; }                     /* Style.space(380) */
+  .hero { display:flex; align-items:center; gap:14px; padding-bottom:2px; }
+  /* OpticalGlyph has no implicit size — it MUST be given a box, or the labels
+     anchor to x=0 and the glyph paints through the title. 24 = font.display. */
+  .hero .hicon { font-family:var(--mono); font-size:24px; width:24px; height:24px;
+                 display:inline-grid; place-items:center; flex:none;
+                 /* 2px optical lift. NOT a metrics correction — the Nerd Font
+                    patcher already centres every icon's ink on the Latin line
+                    box axis (measured: all five glyphs centre at 360/1000 em,
+                    == (hhea.ascender - descent)/2). This is a deliberate shift
+                    toward the bold title, because a bold-14 over thin-10-caps
+                    block is top-heavy and reads as centred above its geometric
+                    middle. Derived, not eyeballed: optical centre weighted 2:1
+                    toward the title sits 1.72px above the geometric centre. */
+                 position:relative; top:-2px; }
+  .hero .htxt { flex:1; min-width:0; }
+  .hero .htitle { font-size:14px; font-weight:600; }                        /* font.title */
+  .hero .hmeta  { font-size:10px; margin-top:2px; text-transform:uppercase;
+                  letter-spacing:1.2px; font-weight:700; }                 /* font.caption, forced upper */
+  .hero .stopall { font-size:11px; padding:6px 10px; border-radius:6px; border:1px solid; white-space:nowrap; }
+  .sep { height:1px; margin:12px 0; }
+  .ghead { display:flex; align-items:center; gap:8px; height:20px; }
+  .ghead .gname { font-size:10px; letter-spacing:.09em; text-transform:uppercase; font-weight:600; }
+  .ghead .gcount { font-size:10px; margin-left:auto; font-family:var(--mono); }
+  .ghead .gacts { display:flex; gap:6px; }
+  .ghead .gacts b { width:22px; height:22px; border-radius:5px; display:grid; place-items:center;
+                    font-family:var(--mono); font-size:14px; font-weight:400; border:1px solid transparent; }
+  .row { display:flex; align-items:center; gap:10px; padding:6px 12px; margin:0 -12px; border-radius:7px; }
+  .row .gl { font-family:var(--mono); font-size:16px; width:20px; text-align:center; flex:none; }
+  .row .rtxt { flex:1; min-width:0; }
+  .row .rname { font-size:12px; }                                          /* font.body */
+  .row .rmeta { font-size:10px; margin-top:1px; font-family:var(--mono); } /* font.caption */
+  .sw { width:42px; height:22px; border-radius:99px; flex:none; position:relative; border:1px solid; }
+  .sw i { position:absolute; top:2px; width:16px; height:16px; border-radius:50%; display:block;
+          transition:left .12s ease; }
+  .spin { display:inline-block; animation:spin 1.1s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+
+  table.dim { width:100%; border-collapse:collapse; font-size:12px; }
+  table.dim th { text-align:left; color:var(--faint); font-weight:500; font-size:10.5px;
+                 letter-spacing:.05em; text-transform:uppercase; padding:0 10px 8px 0; }
+  table.dim td { padding:5px 10px 5px 0; font-family:var(--mono); font-size:11px; }
+  .chip { display:inline-block; padding:3px 9px; border-radius:5px; font-size:11px; }
+  .verdict { font-family:var(--ui); font-size:11px; }
+  .ok { color:#9fe8c0; } .bad { color:#ffb3b8; }
+  .ruler { position:relative; height:16px; width:380px; margin-top:10px;
+           border-left:1px solid var(--faint); border-right:1px solid var(--faint); }
+  .ruler:before { content:""; position:absolute; top:8px; left:0; right:0; border-top:1px dashed var(--faint); }
+  .ruler span { position:absolute; top:0; left:50%; transform:translateX(-50%); background:var(--card);
+                padding:0 6px; font-family:var(--mono); font-size:9.5px; color:var(--faint); }
+</style>
+</head>
+<body>
+<div class="banner">
+  <b>PROTOTYPE / throwaway</b> — verification harness for the Panel chrome pass.
+  Not production QML, and not a design deliverable: it exists to confirm glyph
+  choices by eye and to prove the health-state system holds under every installed
+  palette. Pick glyphs in §1; §3 and §4 update live.
+</div>
+
+<div class="wrap">
+
+<h2><span class="n">§1</span>Glyph selection</h2>
+<p class="lede">
+  Every candidate below is confirmed present in <code>JetBrainsMono Nerd Font</code>,
+  the family <code>fc-match monospace</code> resolves to on this machine — so all of
+  them share the text's metrics. Plain Unicode shapes (<code>U+25CF</code> etc.) are
+  deliberately absent: they fall back to Liberation Sans and would read as pasted in.
+  Pairs are shown together so you can judge whether the two halves carry equal
+  optical weight, which is what makes a two-state column look deliberate.
+</p>
+
+<div class="card">
+  <div style="font-size:11.5px;color:var(--dim);margin-bottom:8px">
+    <b style="color:var(--ink)">running / stopped</b> — pick a pair
+  </div>
+  <div class="gp" id="pairs"></div>
+
+  <div style="font-size:11.5px;color:var(--dim);margin:18px 0 8px">
+    <b style="color:var(--ink)">starting</b> — spins at 1.1s in the mock
+  </div>
+  <div class="gp" id="starting"></div>
+
+  <div style="font-size:11.5px;color:var(--dim);margin:18px 0 8px">
+    <b style="color:var(--ink)">error</b>
+  </div>
+  <div class="gp" id="error"></div>
+
+  <div style="font-size:11.5px;color:var(--dim);margin:18px 0 8px">
+    <b style="color:var(--ink)">group actions</b> — start / stop, shown on hover or keyboard cursor
+  </div>
+  <div class="gp" id="groupact"></div>
+</div>
+
+<h2><span class="n">§2</span>Row anatomy at 380</h2>
+<p class="lede">
+  Measured against real <code>Style.qml</code> values at <code>fontBaseSize 12</code>,
+  <code>spacingScale 1</code>: content width <code>Style.space(380)</code>, padding
+  <code>popupPadding 14</code>, switch <code>42×22</code> with a <code>16px</code> knob
+  (<code>trackHeight = max(22, round(controlHeight×0.55))</code>), group action buttons
+  <code>22×22</code>, <code>running</code> fill at <code>selected-fill-alpha 0.18</code>.
+  Rendered in the active theme, <b id="curName">gruvbox</b>.
+</p>
+<div class="card" style="display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start">
+  <div>
+    <div id="anatomy"></div>
+    <div class="ruler"><span>380 px content width</span></div>
+  </div>
+  <div style="flex:1;min-width:280px">
+    <table class="dim">
+      <tr><th>state</th><th>glyph</th><th>colour</th><th>fill</th><th>motion</th></tr>
+      <tr><td>running</td><td id="tg-run"></td><td>foreground</td><td>0.18</td><td>—</td></tr>
+      <tr><td>stopped</td><td id="tg-stop"></td><td>alpha(fg,.55)</td><td>—</td><td>—</td></tr>
+      <tr><td>starting</td><td id="tg-start"></td><td>accent</td><td>—</td><td>spin</td></tr>
+      <tr><td>error</td><td id="tg-err"></td><td>urgent</td><td>—</td><td>—</td></tr>
+    </table>
+  </div>
+</div>
+
+<h2><span class="n">§3</span>Palette sweep — every installed theme</h2>
+<p class="lede">
+  The whole point of this section: if state reads correctly in all of these, hue is
+  no longer load-bearing. <span class="tag collapse" style="display:inline">collapse</span>
+  marks a theme where <code>accent === foreground</code>, so <code>starting</code> and
+  <code>running</code> are the same colour and only the spinning glyph separates them.
+  <span class="tag light" style="display:inline">light</span> marks a light-foreground
+  theme, where <code>Qt.darker()</code> moves the wrong way — see §4.
+</p>
+<div class="sweep" id="sweep"></div>
+
+<h2><span class="n">§4</span>De-emphasis: <code>Qt.darker</code> vs <code>Util.alpha</code></h2>
+<p class="lede">
+  <code>Panel.qml</code> currently dims secondary text with <code>Qt.darker(fg, 1.4)</code>,
+  copied from the native panels. On a dark theme that reduces contrast against the
+  background, which is the intent. On a light theme the foreground is already dark, so
+  darkening <em>increases</em> contrast — the "dimmed" text ends up more prominent than
+  the primary label. <code>Util.alpha(fg, 0.7)</code> blends toward the background
+  instead, so it de-emphasises in both directions. Contrast ratios are computed against
+  each theme's own background.
+</p>
+<div class="card"><table class="dim" id="dimtable"></table></div>
+
+</div>
+
+<script>
+const PALETTES = [
+{
+"foreground":"#cdd6f4",
+"background":"#1e1e2e",
+"accent":"#89b4fa",
+"urgent":"#f38ba8",
+"muted":"#585b70",
+"name":"catppuccin",
+"mode":"dark",
+"accentCollapsed":false
+},
+{
+"foreground":"#4c4f69",
+"background":"#eff1f5",
+"accent":"#1e66f5",
+"urgent":"#d20f39",
+"muted":"#acb0be",
+"name":"catppuccin-latte",
+"mode":"light",
+"accentCollapsed":false
+},
+{
+"foreground":"#ffcead",
+"background":"#060B1E",
+"accent":"#7d82d9",
+"urgent":"#ED5B5A",
+"muted":"#6d7db6",
+"name":"ethereal",
+"mode":"dark",
+"accentCollapsed":false
+},
+{
+"foreground":"#d3c6aa",
+"background":"#2d353b",
+"accent":"#7fbbb3",
+"urgent":"#e67e80",
+"muted":"#475258",
+"name":"everforest",
+"mode":"dark",
+"accentCollapsed":false
+},
+{
+"foreground":"#100F0F",
+"background":"#FFFCF0",
+"accent":"#205EA6",
+"urgent":"#D14D41",
+"muted":"#B7B5AC",
+"name":"flexoki-light",
+"mode":"light",
+"accentCollapsed":false
+},
+{
+"foreground":"#d4be98",
+"background":"#282828",
+"accent":"#7daea3",
+"urgent":"#ea6962",
+"muted":"#665c54",
+"name":"gruvbox",
+"mode":"dark",
+"accentCollapsed":false
+},
+{
+"foreground":"#ddf7ff",
+"background":"#0B0C16",
+"accent":"#82FB9C",
+"urgent":"#50f872",
+"muted":"#2d3450",
+"name":"hackerman",
+"mode":"dark",
+"accentCollapsed":false
+},
+{
+"foreground":"#dcd7ba",
+"background":"#1f1f28",
+"accent":"#dcd7ba",
+"urgent":"#c34043",
+"muted":"#54546D",
+"name":"kanagawa",
+"mode":"dark",
+"accentCollapsed":true
+},
+{
+"foreground":"#FAFCFB",
+"background":"#0c0b0c",
+"accent":"#b59790",
+"urgent":"#c38b7b",
+"muted":"#584e51",
+"name":"last-horizon",
+"mode":"dark",
+"accentCollapsed":false
+},
+{
+"foreground":"#d6e2ee",
+"background":"#16242d",
+"accent":"#8bc9eb",
+"urgent":"#4d86b0",
+"muted":"#304860",
+"name":"lumon",
+"mode":"dark",
+"accentCollapsed":false
+},
+{
+"foreground":"#212121",
+"background":"#fafafa",
+"accent":"#3264eb",
+"urgent":"#c900c4",
+"muted":"#9e9e9e",
+"name":"lupine",
+"mode":"light",
+"accentCollapsed":false
+},
+{
+"foreground":"#bebebe",
+"background":"#121212",
+"accent":"#e68e0d",
+"urgent":"#D35F5F",
+"muted":"#333333",
+"name":"matte-black",
+"mode":"dark",
+"accentCollapsed":false
+},
+{
+"foreground":"#c2c2b0",
+"background":"#222222",
+"accent":"#78824b",
+"urgent":"#685742",
+"muted":"#666666",
+"name":"miasma",
+"mode":"dark",
+"accentCollapsed":false
+},
+{
+"foreground":"#d8dee9",
+"background":"#2e3440",
+"accent":"#81a1c1",
+"urgent":"#bf616a",
+"muted":"#4c566a",
+"name":"nord",
+"mode":"dark",
+"accentCollapsed":false
+},
+{
+"foreground":"#C1C497",
+"background":"#111c18",
+"accent":"#509475",
+"urgent":"#FF5345",
+"muted":"#53685B",
+"name":"osaka-jade",
+"mode":"dark",
+"accentCollapsed":false
+},
+{
+"foreground":"#f6dcac",
+"background":"#05182e",
+"accent":"#faa968",
+"urgent":"#f85525",
+"muted":"#2a6b78",
+"name":"retro-82",
+"mode":"dark",
+"accentCollapsed":false
+},
+{
+"foreground":"#e6d9db",
+"background":"#2c2525",
+"accent":"#f38d70",
+"urgent":"#fd6883",
+"muted":"#72696a",
+"name":"ristretto",
+"mode":"dark",
+"accentCollapsed":false
+},
+{
+"foreground":"#575279",
+"background":"#faf4ed",
+"accent":"#56949f",
+"urgent":"#b4637a",
+"muted":"#cecacd",
+"name":"rose-pine",
+"mode":"light",
+"accentCollapsed":false
+},
+{
+"foreground":"#cacccc",
+"background":"#101315",
+"accent":"#798186",
+"urgent":"#565d60",
+"muted":"#4b4e55",
+"name":"solitude",
+"mode":"dark",
+"accentCollapsed":false
+},
+{
+"foreground":"#a9b1d6",
+"background":"#1a1b26",
+"accent":"#7aa2f7",
+"urgent":"#f7768e",
+"muted":"#414868",
+"name":"tokyo-night",
+"mode":"dark",
+"accentCollapsed":false
+},
+{
+"foreground":"#ffffff",
+"background":"#000000",
+"accent":"#8d8d8d",
+"urgent":"#a4a4a4",
+"muted":"#7a7a7a",
+"name":"vantablack",
+"mode":"dark",
+"accentCollapsed":false
+},
+{
+"foreground":"#000000",
+"background":"#ffffff",
+"accent":"#6e6e6e",
+"urgent":"#2a2a2a",
+"muted":"#808080",
+"name":"white",
+"mode":"light",
+"accentCollapsed":false
+}
+]
+;
+const PAIRS = ["F0337 F0338", "F0318 F0319", "F06A5 F06A6", "F05E0 F0159", "F0130 F012F", "F0765 F09DE", "F0335 F0336", "F0450 F0451", "F04B2 F04B3", "F0567 F0568", "F0209 F020A", "F1077 F1078", "F0139 F013A", "F0594 F0595", "F0FA8 F0FA9", "F0EA9 F0EAA"], STARTING = ["F0996", "F051F", "F040A", "F040C", "F179A", "F0A31", "F0A2A"], ERROR = ["F002A", "F0026", "F0159", "F0163", "F0AA0"], GROUPACT = ["F040A F04DB", "F040C F0666", "F0450 F0451"];
+
+const pick = { pair: PAIRS[0], starting: STARTING[0], error: ERROR[0], groupact: GROUPACT[0] };
+const ch = cp => String.fromCodePoint(parseInt(cp, 16));
+const glyphs = () => {
+  const [run, stop] = pick.pair.split(" ");
+  const [gs, gt] = pick.groupact.split(" ");
+  return { run, stop, starting: pick.starting, error: pick.error, gStart: gs, gStop: gt };
+};
+
+/* ---- colour maths ---------------------------------------------------- */
+const hex2rgb = h => [1,3,5].map(i => parseInt(h.slice(i, i+2), 16));
+const rgb2css = (c, a) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
+// Qt.darker(c, f) divides the HSV value by f, clamping at 0.
+function qtDarker(hex, f) {
+  let [r,g,b] = hex2rgb(hex).map(v => v/255);
+  const mx = Math.max(r,g,b), mn = Math.min(r,g,b), d = mx-mn;
+  let h2 = 0;
+  if (d) {
+    if (mx === r) h2 = ((g-b)/d) % 6; else if (mx === g) h2 = (b-r)/d + 2; else h2 = (r-g)/d + 4;
+    h2 *= 60; if (h2 < 0) h2 += 360;
+  }
+  const s = mx ? d/mx : 0, v = Math.min(1, mx/f);
+  const c2 = v*s, x = c2*(1 - Math.abs(((h2/60)%2)-1)), m = v-c2;
+  let rgb = h2<60?[c2,x,0]:h2<120?[x,c2,0]:h2<180?[0,c2,x]:h2<240?[0,x,c2]:h2<300?[x,0,c2]:[c2,0,x];
+  return rgb.map(t => Math.round((t+m)*255));
+}
+const lum = c => { const s = c.map(v => { v/=255; return v<=.03928 ? v/12.92 : Math.pow((v+.055)/1.055, 2.4); });
+                   return .2126*s[0] + .7152*s[1] + .0722*s[2]; };
+const ratio = (a, b) => { const [x,y] = [lum(a), lum(b)].sort((p,q)=>q-p); return (x+.05)/(y+.05); };
+// Composite an alpha'd foreground over the background, the way the compositor does.
+const over = (fg, bg, a) => fg.map((v,i) => Math.round(v*a + bg[i]*(1-a)));
+
+/* ---- glyph pickers --------------------------------------------------- */
+function buildPickers() {
+  const mk = (host, list, key, isPair) => {
+    document.getElementById(host).innerHTML = list.map(v => {
+      const body = isPair
+        ? `<span class="gl2">${v.split(" ").map(ch).join("")}</span>`
+        : `<span class="gl">${ch(v)}</span>`;
+      const cp = isPair ? v.split(" ").map(x=>"+"+x).join(" ") : "+"+v;
+      return `<div class="cand ${pick[key]===v?"sel":""}" data-k="${key}" data-v="${v}">
+                ${body}<span class="cp">${cp}</span></div>`;
+    }).join("");
+  };
+  mk("pairs", PAIRS, "pair", true);
+  mk("starting", STARTING, "starting", false);
+  mk("error", ERROR, "error", false);
+  mk("groupact", GROUPACT, "groupact", true);
+  document.querySelectorAll(".cand").forEach(el => el.onclick = () => {
+    pick[el.dataset.k] = el.dataset.v; buildPickers(); renderAll();
+  });
+}
+
+/* ---- panel mock ------------------------------------------------------ */
+const ROWS = [
+  { g:"backend", name:"Backend Dev",  st:"running",  meta:"127.0.0.1:15432" },
+  { g:"backend", name:"Backend Prod", st:"stopped",  meta:"127.0.0.1:15433" },
+  { g:"fe",      name:"FE Dev",       st:"error",    meta:"port_in_use · :15434" },
+  { g:"iot",     name:"IoT Dev",      st:"starting", meta:":15437" }
+];
+const GC = { backend:"1/2", fe:"0/3 · 2 err", iot:"0/2" };
+
+function panelHTML(t, opts) {
+  const G = glyphs();
+  const fg = hex2rgb(t.foreground), bg = hex2rgb(t.background),
+        ac = hex2rgb(t.accent), ur = hex2rgb(t.urgent);
+  const stateColor = { running: rgb2css(fg,1), stopped: rgb2css(fg,.55),
+                       starting: rgb2css(ac,1), error: rgb2css(ur,1) };
+  const stateGlyph = { running:G.run, stopped:G.stop, starting:G.starting, error:G.error };
+  const label = { running:"running", stopped:"stopped", starting:"starting…", error:"" };
+
+  let out = "", last = null;
+  for (const r of ROWS) {
+    if (r.g !== last) {
+      last = r.g;
+      out += `<div class="ghead" style="margin-top:${out?12:0}px">
+        <span class="gname" style="color:${rgb2css(fg,.75)}">${r.g}</span>
+        <span class="gcount" style="color:${rgb2css(fg,.5)}">${GC[r.g]}</span>
+        <span class="gacts">
+          <b style="color:${rgb2css(fg,.85)};background:${rgb2css(fg,.04)};border-color:${rgb2css(fg,.4)}">${ch(G.gStart)}</b>
+          <b style="color:${rgb2css(fg,.85)};background:${rgb2css(fg,.04)};border-color:${rgb2css(fg,.4)}">${ch(G.gStop)}</b>
+        </span></div>`;
+    }
+    const on = r.st === "running" || r.st === "starting";
+    const fill = r.st === "running" ? rgb2css(fg,.18) : "transparent";
+    const spin = r.st === "starting" ? ' spin' : '';
+    const meta = (label[r.st] ? label[r.st] + " · " : "") + r.meta;
+    out += `<div class="row" style="background:${fill}">
+      <span class="gl${spin}" style="color:${stateColor[r.st]}">${ch(stateGlyph[r.st])}</span>
+      <span class="rtxt">
+        <span class="rname" style="display:block;color:${r.st==="stopped"?rgb2css(fg,.72):rgb2css(fg,1)}">${r.name}</span>
+        <span class="rmeta" style="display:block;color:${r.st==="error"?rgb2css(ur,.95):rgb2css(fg,.55)}">${meta}</span>
+      </span>
+      <span class="sw" style="border-color:${on?rgb2css(fg,.55):rgb2css(fg,.3)};background:${on?rgb2css(fg,.18):rgb2css(fg,.05)}">
+        <i style="left:${on?24:2}px;background:${on?rgb2css(fg,1):rgb2css(fg,.5)}"></i></span>
+    </div>`;
+  }
+
+  return `<div class="panel pw" style="background:${t.background}">
+    <div class="hero">
+      <span class="hicon" style="color:${rgb2css(fg,1)}">${ch("F015F")}</span>
+      <span class="htxt">
+        <span class="htitle" style="display:block;color:${rgb2css(fg,1)}">Cloud SQL Tracker</span>
+        <span class="hmeta" style="display:block;color:${rgb2css(fg,.6)}">1 of 7 running · 2 error</span>
+      </span>
+      <span class="stopall" style="color:${rgb2css(fg,.9)};border-color:${rgb2css(fg,.4)};background:${rgb2css(fg,.04)}">Stop all</span>
+    </div>
+    <div class="sep" style="background:${rgb2css(fg,.12)}"></div>
+    ${out}
+  </div>`;
+}
+
+/* ---- renderers ------------------------------------------------------- */
+function renderAnatomy() {
+  const t = PALETTES.find(p => p.name === "gruvbox") || PALETTES[0];
+  document.getElementById("curName").textContent = t.name;
+  document.getElementById("anatomy").innerHTML =
+    `<div style="border:1px solid var(--edge);border-radius:10px;overflow:hidden;width:408px">${panelHTML(t)}</div>`;
+  const G = glyphs(), f = 'font-family:var(--mono);font-size:15px';
+  document.getElementById("tg-run").innerHTML   = `<span style="${f}">${ch(G.run)}</span> <span style="color:var(--faint)">+${G.run}</span>`;
+  document.getElementById("tg-stop").innerHTML  = `<span style="${f}">${ch(G.stop)}</span> <span style="color:var(--faint)">+${G.stop}</span>`;
+  document.getElementById("tg-start").innerHTML = `<span style="${f}">${ch(G.starting)}</span> <span style="color:var(--faint)">+${G.starting}</span>`;
+  document.getElementById("tg-err").innerHTML   = `<span style="${f}">${ch(G.error)}</span> <span style="color:var(--faint)">+${G.error}</span>`;
+}
+
+function renderSweep() {
+  document.getElementById("sweep").innerHTML = PALETTES.map(t => {
+    const tags = (t.mode !== "dark" ? `<span class="tag light">light</span>` : "")
+               + (t.accentCollapsed ? `<span class="tag collapse">accent = fg</span>` : "");
+    const sw = ["foreground","background","accent","urgent","muted"]
+      .map(k => `<i style="background:${t[k]}" title="${k} ${t[k]}"></i>`).join("");
+    return `<div class="theme">
+      <div class="tname">${t.name}${tags}<span class="swatches">${sw}</span></div>
+      ${panelHTML(t)}</div>`;
+  }).join("");
+}
+
+function renderDim() {
+  const rows = PALETTES.map(t => {
+    const fg = hex2rgb(t.foreground), bg = hex2rgb(t.background);
+    const dk = qtDarker(t.foreground, 1.4);
+    const al = over(fg, bg, 0.7);
+    const rBase = ratio(fg, bg), rDark = ratio(dk, bg), rAlpha = ratio(al, bg);
+    // Three outcomes, not two. Inverted: darkening a light theme's dark
+    // foreground gains contrast. No-op: foreground is already pure black, so
+    // HSV value is 0 and Qt.darker cannot move it at all — de-emphasis just
+    // silently doesn't happen. Only the third case is correct behaviour.
+    const verdict = rDark > rBase + 0.01 ? "inverted"
+                  : Math.abs(rDark - rBase) <= 0.01 ? "noop" : "ok";
+    return { t, fg, bg, dk, al, rBase, rDark, rAlpha, verdict };
+  });
+  const inv = rows.filter(r => r.verdict === "inverted").length;
+  const noop = rows.filter(r => r.verdict === "noop").length;
+  document.getElementById("dimtable").innerHTML = `
+    <tr><th>theme</th><th>primary</th><th>Qt.darker(fg,1.4)</th><th>alpha(fg,.7)</th><th>verdict</th></tr>
+    ${rows.map(r => `<tr>
+      <td>${r.t.name}${r.t.mode!=="dark"?' <span class="tag light">light</span>':""}</td>
+      <td><span class="chip" style="background:${r.t.background};color:${r.t.foreground}">${r.rBase.toFixed(2)}:1</span></td>
+      <td><span class="chip" style="background:${r.t.background};color:rgb(${r.dk.join(",")})">${r.rDark.toFixed(2)}:1</span></td>
+      <td><span class="chip" style="background:${r.t.background};color:rgb(${r.al.join(",")})">${r.rAlpha.toFixed(2)}:1</span></td>
+      <td class="verdict ${r.verdict==="ok"?"ok":"bad"}">${
+          r.verdict==="inverted" ? "inverted — darker gained contrast"
+        : r.verdict==="noop"     ? "no-op — fg is already black, cannot dim"
+        :                          "darker reduced contrast"}</td></tr>`).join("")}
+    <tr><td colspan="5" style="padding-top:12px;font-family:var(--ui);font-size:11.5px;color:var(--dim)">
+      <code>Qt.darker</code> fails to de-emphasise on <b>${inv + noop} of ${rows.length}</b> themes
+      &mdash; inverted on ${inv}, a no-op on ${noop}.
+      <code>Util.alpha</code> reduces contrast on all ${rows.length}.</td></tr>`;
+}
+
+function renderAll() { renderAnatomy(); renderSweep(); renderDim(); }
+buildPickers(); renderAll();
+</script>
+</body>
+</html>

@@ -7,5 +7,9 @@ Status document (schema v1) samples for `Model.js`, not for the CLI itself.
   repo if the golden changes; do not hand-edit it out of sync.
 - `status.v1.bad-version.json` — minimal document with `version: 2`, used to
   exercise the `degraded.kind === "schema"` path.
+- `status.v1.empty.json` — valid v1 document describing zero Connections. Proves
+  an empty Status document parses as usable (`ok: true`), **not** Degraded, which
+  is what lets the Panel tell "nothing configured" apart from "control plane
+  broken". Also the fixture behind the Panel's empty body.
 
 Used by [`scripts/check-model.js`](../scripts/check-model.js).

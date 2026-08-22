@@ -24,12 +24,21 @@ Frozen after prototypes ([issue #3](https://github.com/golgor/cloud-sql-tracker-
 
 **Layout name:** **Grouped list** (prototype variant **A**).
 
+Visual and interaction detail — tokens, glyphs, measurements, keyboard map, copy —
+lives in [`docs/chrome.md`](./chrome.md). This section stays the **decision**
+record: what is locked, what is out, and why. `chrome.md` is **normative for how it
+looks and behaves**. If the two disagree, one of them is a bug.
+
 ### Bar
 
 - Icon + **running count** (`Tracker.runningCount`)
 - **Warning affordance** when `errorCount > 0` **or** Tracker is **Degraded**
 - Tooltip: short summary (e.g. running/total, or degraded message)
 - Left click toggles the panel
+- Icon glyph comes from the **Nerd Font MDI range** — the family `fc-match
+  monospace` resolves to. Plain Unicode symbols (e.g. `☁` `U+2601`) fall back to an
+  unrelated font: different metrics from the count rendered beside them, and tofu
+  wherever that fallback font is absent.
 
 ### Panel — Grouped list
 
@@ -45,13 +54,50 @@ Single scrollable column (not two-pane in v1):
      - UI calls `Tracker.start` / `Tracker.stop` with Action target `{ kind: "id", id }` — no `toggle()` on Tracker
 3. Busy: disable or spinner on the row / group whose action is in flight (`busy` / `busyKey`); do not block the whole panel harder than necessary
 
+#### Amendments — chrome pass
+
+The list above predates the chrome pass. These four points supersede it:
+
+- **Panel size is `Style.space(380) × Style.space(560)`** — the shell's default for
+  list panels (7 of 10 native panels use 380). The original `340 × 420` was narrower
+  *and* shorter than every native panel, with no reason recorded.
+- **Group actions are icon buttons** (`PanelActionButton`), revealed on hover or
+  keyboard cursor — not always-visible text buttons. Two `Start group` / `Stop group`
+  text buttons cost ~190px of a 380px panel, repeated once per Group.
+- **Group counts sit on the group header line**, right-aligned, not on a second line.
+- **`Stop all` stays one-way.** Native panels put a symmetric on/off switch in the
+  header, but "start every Connection" means N proxy processes and N GCP auth
+  handshakes from one click. The asymmetry is a safety property, not an oversight.
+
 ### Connection row detail (inline, not a second pane)
 
 Show on the row or a single-line subtitle:
 
 - **Show:** name, group (via section), Health state, **port**, **address**
-- **When `error`:** error code and/or short message from Status `error`
+- **When `error`:** error **code** on the row; the full `detail` string goes in a
+  `PanelToolTip`, rather than wrapping the row to three lines and breaking the
+  uniform row height
 - **Do not show in v1 UI:** full Cloud SQL `instance` string, systemd `unit`, `pid`, `uptime` (may appear later in tooltip or Expanded view)
+
+### Keyboard
+
+Every native Omarchy panel is fully drivable without a mouse, and the shell's own
+gallery (`plugins/dev-gallery/GalleryPanel.qml`) names
+`plugins/panels/audio/Panel.qml` as the recipe plugin authors should copy. Locked:
+
+| Key | Target | Action |
+|-----|--------|--------|
+| `j` / `k` | anywhere | Walk Connection rows, crossing Group boundaries |
+| `Enter` | Connection row | Toggle that Connection — same verb rule as the mouse |
+| `Enter` | Group header | Toggle the Group: `stop` if `running + starting > 0`, else `start` |
+| `Enter` | Panel header | Stop all |
+| `h` / `l` | Group header | Explicit `stop` / `start` for that Group |
+| `Esc` | anywhere | Close |
+| `Tab` | anywhere | Switch to the sibling panel |
+
+**One cursor for mouse and keyboard.** Hover writes the same `focusSection` /
+`selectedIndex` / `cursorActive` state the keys do, so there is never a second
+competing highlight.
 
 ### Degraded and empty (full panel body)
 
@@ -101,5 +147,9 @@ Order is indicative once install + Tracker exist; adjust on the map as tickets l
 4. Panel: Grouped list + per-row toggle + group start/stop + stop all
 5. Empty / degraded copy polish
 6. Dogfood + remaining docs (`AGENTS.md`, how-it-works)
+7. Chrome pass: house-style Panel (`PanelHero`, `CursorSurface` rows, `ToggleSwitch`,
+   keyboard cursor), health-state glyph system, `380 × 560` — spec in
+   [`docs/chrome.md`](./chrome.md), verified with
+   [`docs/prototypes/theme-sweep`](./prototypes/theme-sweep/)
 
 CLI work stays in the sibling repo.
