@@ -484,6 +484,14 @@ are the same row.)
   Session-scoped: no state file is involved, and this plugin owns none by design. A
   shell restart starts cold.
 
+  **Positional, deliberately.** The cursor is `focusSection` + `selectedIndex`, so it
+  restores to a *position*, not to a Connection `id`. Reordering `connections.json`
+  therefore lands the cursor on whatever now occupies that index. Accepted: the config
+  is hand-edited and settles after the first couple of passes, `clampCursor` guarantees
+  the position is always in range so it can never point at nothing, and keying on `id`
+  would mean carrying an identity that the flat row model does not otherwise need.
+  Not a defect to fix — a trade-off already weighed.
+
 - `ListView` with `ScrollBar.AsNeeded`; `positionViewAtIndex(i, ListView.Contain)` on
   cursor move so `Contain` only scrolls when the row is actually clipped, and never
   lurches under a hovering mouse.
