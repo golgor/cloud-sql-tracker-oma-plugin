@@ -36,6 +36,39 @@ Validate a local checkout:
 omarchy plugin validate ~/Code/Personal/cloud-sql-tracker-oma-plugin
 ```
 
+## Local development
+
+For working on this plugin itself, symlink this checkout into Omarchy's plugin
+directory instead of using `omarchy plugin add` (which clones a copy):
+
+```bash
+./scripts/dev-link
+```
+
+This symlinks `~/.config/omarchy/plugins/io.github.golgor.cloud-sql-tracker`
+to this checkout, runs `omarchy plugin validate`, rescans plugins, and
+enables the widget (default bar section: `right`). Saved edits under this
+checkout hot-reload — no re-copy needed. Safe to re-run.
+
+```bash
+./scripts/dev-link --help              # options
+./scripts/dev-link --section left      # place elsewhere
+./scripts/dev-link --no-enable         # link + validate only
+```
+
+It never deletes a real plugin directory: if something other than a symlink
+to this checkout already occupies that path, it fails with no changes made.
+
+**Unlink:**
+
+```bash
+rm ~/.config/omarchy/plugins/io.github.golgor.cloud-sql-tracker
+omarchy plugin disable io.github.golgor.cloud-sql-tracker   # optional
+```
+
+`omarchy plugin add <git-url>` (above) remains the non-dev install path for
+everyone else — it clones its own copy rather than tracking a local checkout.
+
 ## Contract
 
 The plugin **only** shells out to:

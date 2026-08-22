@@ -1,0 +1,136 @@
+#!/usr/bin/env bash
+# scripts/dev-link — symlink this checkout into Omarchy's plugin directory.
+#
+# After this runs, Omarchy's shell loads this git checkout directly. Edits
+# saved here hot-reload without a re-copy. See README.md "Local development"
+# and docs/DESIGN.md for the install contract.
+#
+# Safe to re-run. Never deletes a real (non-symlink) plugin directory.
+set -euo pipefail
+
+PLUGIN_ID="io.github.golgor.cloud-sql-tracker"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PLUGINS_DIR="${OMARCHY_PLUGINS_DIR:-$HOME/.config/omarchy/plugins}"
+TARGET="$PLUGINS_DIR/$PLUGIN_ID"
+
+FORCE=0
+DO_ENABLE=1
+SECTION="right"
+
+usage() {
+  cat <<USAGE
+Usage: scripts/dev-link [--force] [--no-enable] [--section left|center|right]
+
+Symlinks this checkout to the Omarchy plugin path Omarchy loads:
+
+  $TARGET -> $REPO_ROOT
+
+Then validates the checkout, asks the running shell to rescan plugins, and
+enables the plugin on the bar.
+
+Options:
+  --force            Replace an existing symlink at the target path if it
+                      points somewhere other than this checkout. Never
+                      touches a real (non-symlink) directory or file at the
+                      target — that always fails with no changes made.
+  --no-enable        Link, validate, and rescan only. Skip
+                      "omarchy plugin enable". Use this if you want to place
+                      the widget yourself in ~/.config/omarchy/shell.json, or
+                      enable is already handled.
+  --section <s>      Bar section to enable into: left, center, or right.
+                      Default: right.
+  -h, --help         Show this help.
+
+To remove the dev link later:
+  rm "$TARGET"
+  omarchy plugin disable $PLUGIN_ID   # optional
+USAGE
+}
+
+while (( $# > 0 )); do
+  case "$1" in
+    --force)
+      FORCE=1
+      shift
+      ;;
+    --no-enable)
+      DO_ENABLE=0
+      shift
+      ;;
+    --section)
+      SECTION="${2:-}"
+      [[ -n $SECTION ]] || { echo "dev-link: --section requires a value" >&2; exit 1; }
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "dev-link: unknown option: $1" >&2
+      usage >&2
+      exit 1
+      ;;
+  esac
+done
+
+[[ $SECTION =~ ^(left|center|right)$ ]] || {
+  echo "dev-link: --section must be left, center, or right (got: $SECTION)" >&2
+  exit 1
+}
+
+fail() {
+  echo "dev-link: $*" >&2
+  exit 1
+}
+
+command -v omarchy >/dev/null 2>&1 || fail "'omarchy' not found on PATH; this script is for an Omarchy install."
+command -v omarchy-shell >/dev/null 2>&1 || fail "'omarchy-shell' not found on PATH; this script is for an Omarchy install."
+
+mkdir -p "$PLUGINS_DIR"
+
+if [[ -L "$TARGET" ]]; then
+  current_target="$(readlink -f "$TARGET" 2>/dev/null || true)"
+  if [[ "$current_target" == "$REPO_ROOT" ]]; then
+    echo "dev-link: $TARGET already links to this checkout"
+  elif (( FORCE )); then
+    echo "dev-link: replacing existing symlink $TARGET -> ${current_target:-<broken>}"
+    rm "$TARGET"
+    ln -s "$REPO_ROOT" "$TARGET"
+    echo "dev-link: linked $TARGET -> $REPO_ROOT"
+  else
+    fail "$TARGET is a symlink to a different path (${current_target:-<broken>}). Re-run with --force to replace it, or remove it yourself first."
+  fi
+elif [[ -e "$TARGET" ]]; then
+  fail "$TARGET exists and is not a symlink. Refusing to touch a real plugin directory; move or remove it yourself, then re-run."
+else
+  ln -s "$REPO_ROOT" "$TARGET"
+  echo "dev-link: linked $TARGET -> $REPO_ROOT"
+fi
+
+# Validate the real checkout, not $TARGET: $TARGET is itself a symlink, and
+# validate's own symlink check (find -type l) matches a symlink given as the
+# starting path, which would fail every time for the wrong reason. Validating
+# $REPO_ROOT still catches real problems: a stray symlink *inside* the repo.
+echo "dev-link: validating $REPO_ROOT"
+omarchy plugin validate "$REPO_ROOT"
+
+echo "dev-link: rescanning plugins"
+omarchy-shell shell rescanPlugins
+
+if (( DO_ENABLE )); then
+  echo "dev-link: enabling $PLUGIN_ID (section: $SECTION)"
+  if ! omarchy plugin enable "$PLUGIN_ID" --section "$SECTION"; then
+    cat >&2 <<HINT
+dev-link: enable did not succeed (it may already be enabled, or the shell
+needs a moment after rescan). Enable manually with:
+  omarchy plugin enable $PLUGIN_ID --section $SECTION
+or place it via ~/.config/omarchy/shell.json.
+HINT
+  fi
+else
+  echo "dev-link: skipped enable (--no-enable). Enable manually with:"
+  echo "  omarchy plugin enable $PLUGIN_ID --section $SECTION"
+fi
+
+echo "dev-link: done"
