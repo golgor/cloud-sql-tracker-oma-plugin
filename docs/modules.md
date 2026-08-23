@@ -130,6 +130,7 @@ Pure functions only (no QML imports, no Process):
 
 - `parseStatusDocument(text) → { ok, degraded?, running, error, total, groups, connections, cliVersion, … }`
 - Require Status document `version === 1`; ignore unknown fields (additive-safe consumer)
+- Parse `connections[].enabled` (missing → `true`). Recompute **enabled-only** `running`/`error`/`total` and per-group counters for the bar/panel; disabled rows remain in `connections` (issue #26)
 - Optional helpers (e.g. semver compare) stay pure if extracted
 
 Golden fixture: sibling CLI `examples/status.v1.json` (copy or path in tests later).

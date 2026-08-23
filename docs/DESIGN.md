@@ -33,7 +33,7 @@ looks and behaves**. If the two disagree, one of them is a bug.
 
 - Icon + **running count** (`Tracker.runningCount`)
 - **Warning affordance** when `errorCount > 0` **or** Tracker is **Degraded**
-- Tooltip: short summary (e.g. running/total, or degraded message)
+- Tooltip: short summary (e.g. running/total among **enabled** Connections, or degraded message)
 - Left click toggles the panel
 - Icon glyph comes from the **Nerd Font MDI range** — the family `fc-match
   monospace` resolves to. Plain Unicode symbols (e.g. `☁` `U+2601`) fall back to an
@@ -87,7 +87,8 @@ The list above predates the chrome pass. These six points supersede it:
 
 Show on the row or a single-line subtitle:
 
-- **Show:** name, group (via section), Health state, **port**, **address**
+- **Show:** name, group (via section), Health state **or** `disabled`, **port**, **address**
+- **When `enabled: false`:** still listed; status line `disabled · address:port`; no start intent; toggle inert. Group/bar counts use **enabled-only** denominators (issue #26). Missing Status field → treat as enabled.
 - **When `error`:** error **code** on the row; the full `detail` string goes in a
   `PanelToolTip`, rather than wrapping the row to three lines and breaking the
   uniform row height

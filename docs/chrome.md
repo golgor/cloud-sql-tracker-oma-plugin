@@ -363,10 +363,25 @@ Fields shown are exactly `name`, `state`, `address`, `port`, `error.code`
 
 | Property | Value |
 |----------|-------|
-| `checked` | the row's **intent** while one is held, else `state === "running" \|\| state === "starting"` — see §5 |
-| `busy` | `tracker.busy` — panel-wide, not `busyKey`-scoped: Tracker runs one action at a time, so every switch is equally unclickable while any is in flight |
+| `checked` | the row's **intent** while one is held, else `state === "running" || state === "starting"` — see §5. **Disabled** Connections (`enabled === false`): always `false` |
+| `busy` | `tracker.busy` — panel-wide, not `busyKey`-scoped: Tracker runs one action at a time, so every switch is equally unclickable while any is in flight. **Also `true` when the Connection is disabled** — swallows clicks with **no** geometry change (same reason we never use `interactive`) |
 | `interactive` | **never bound.** It drives `cursorRing`, and so the control's implicit size — see the geometry rule below |
-| `onToggled` | `root.toggleConnection(conn)` — **never `tracker.start`/`stop` directly.** The command function is what busy-guards the click, records the intent, *then* calls Tracker; calling Tracker from the switch skips the intent and so loses both the optimistic knob and the projected `starting` (§2) |
+| `onToggled` | `root.toggleConnection(conn)` — **never `tracker.start`/`stop` directly.** The command function is what busy-guards the click, records the intent, *then* calls Tracker; calling Tracker from the switch skips the intent and so loses both the optimistic knob and the projected `starting` (§2). No-op when disabled |
+
+### Disabled Connections (`enabled: false`)
+
+Config policy on the Status row (CLI field), **not** a Health state. Product: **show** the row; **do not** start it. Plugin never reads `connections.json`.
+
+| Channel | Resting look |
+|---------|----------------|
+| Status line | `disabled  ·  address:port` (not `stopped · …`) |
+| Glyph | Same link-off as stopped, lower alpha (`displayState === "disabled"`) |
+| Name / status colours | Muted |
+| Toggle | Off + `busy` (inert, full size) |
+| Intent | Never set for start; Group/all start intent lists **enabled members only** |
+| Counts | Bar, hero, Group headers: **enabled-only** denominator (`Model.js`). Empty body uses **published** row count so an all-disabled config still lists rows |
+
+Missing `enabled` on an old CLI document → treat as `true`.
 
 `canStart(state)` is `state === "stopped" || state === "error"`. The **UI** picks the
 verb; `Tracker` deliberately has no `toggle()` (`docs/modules.md`).
@@ -399,7 +414,7 @@ and none of them has to dim to provide it.
 
 | Control | Blocks clicks via | Visually silent when blocked? |
 |---------|-------------------|-------------------------------|
-| Row `ToggleSwitch` | `busy: tracker.busy` | Yes — `busy` gates only `onClicked` |
+| Row `ToggleSwitch` | `busy: tracker.busy || !enabled` | Yes — `busy` gates only `onClicked` |
 | Group start / stop | the command guard | Yes — `enabled` tracks the reveal alone, so the spinner stays at full brightness |
 | `Stop all` | `enabled` | Yes — `Button` colours derive from `selected`/`foreground`, never `enabled` |
 

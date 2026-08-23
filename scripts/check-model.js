@@ -22,10 +22,11 @@ function checkHappyFixture() {
   assert.strictEqual(result.degraded, null)
   assert.strictEqual(result.version, 1)
   assert.strictEqual(result.cliVersion, "0.1.0")
+  // Aggregates are enabled-only (#26). backend-prod is disabled in the fixture.
   assert.strictEqual(result.running, 1)
   assert.strictEqual(result.error, 2)
-  assert.strictEqual(result.stopped, 4)
-  assert.strictEqual(result.total, 7)
+  assert.strictEqual(result.stopped, 3)
+  assert.strictEqual(result.total, 6)
   assert.strictEqual(result.connections.length, 7)
   assert.deepStrictEqual(
     result.groups.map(function (g) { return g.name }),
@@ -39,8 +40,39 @@ function checkHappyFixture() {
   assert.strictEqual(feDev.port, 15434)
   assert.strictEqual(feDev.address, "127.0.0.1")
   assert.strictEqual(feDev.error.code, "port_in_use")
+  assert.strictEqual(feDev.enabled, true)
 
-  console.log("ok: happy fixture (7 connections, 3 groups, fe-dev error mapped)")
+  var backendProd = result.connections.filter(function (c) { return c.id === "backend-prod" })[0]
+  assert.ok(backendProd)
+  assert.strictEqual(backendProd.enabled, false)
+
+  var backend = result.groups.filter(function (g) { return g.name === "backend" })[0]
+  assert.ok(backend)
+  assert.strictEqual(backend.total, 1, "backend group total is enabled-only")
+  assert.strictEqual(backend.running, 1)
+  assert.strictEqual(backend.stopped, 0)
+
+  // Missing enabled on a synthetic document defaults to true.
+  var legacy = Model.parseStatusDocument(JSON.stringify({
+    version: 1,
+    ts: "t",
+    cli_version: "0.1.0",
+    running: 0,
+    starting: 0,
+    error: 0,
+    stopped: 1,
+    total: 1,
+    groups: { g: { running: 0, starting: 0, error: 0, stopped: 1, total: 1 } },
+    connections: [{
+      id: "x", name: "X", group: "g", state: "stopped",
+      port: 1, address: "127.0.0.1", error: null
+    }]
+  }))
+  assert.strictEqual(legacy.ok, true)
+  assert.strictEqual(legacy.connections[0].enabled, true)
+  assert.strictEqual(legacy.total, 1)
+
+  console.log("ok: happy fixture (7 connections, enabled-only totals, fe-dev error mapped)")
 }
 
 function checkBadVersionFixture() {
