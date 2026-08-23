@@ -76,6 +76,42 @@ also literally right: a Connection *is* a forwarded link to a remote instance.
 `U+F0996` is already this repo's spinner glyph. `U+F002A` is
 alert-circle: a filled shape at the same weight as the pair, so the column stays even.
 
+### `starting` is projected from intent, not waited for
+
+The state a row renders is `displayState`, not the polled Health state: while an
+intent to **start** is outstanding and the Connection is not already `running` or
+`starting`, the row renders `starting` across all five channels.
+
+Without it, `starting` is nearly unreachable from a panel action. `start` **blocks
+until the port opens** (`--wait-ms`, default `10000`), so the guaranteed post-action
+poll — `delayedRefresh`, 500ms after the process exits — always observes the
+*finished* state. Catching a genuine `starting` document needs a `pollTimer` tick to
+land inside the start window, which `reconcile.v1.md` puts at *typically ~1s*, against
+a 2s interval while the panel is open. Measured, a `status --json` costs 23ms, so the
+document is cheap; the problem is purely when it is asked for. The result was that
+rows went link-off → link with no `starting` ever on screen, and the only working
+progress signal was the Group button's spinner.
+
+**Truth still wins, it just lands second.** The first document to arrive with no
+action in flight drops the intent (§5), so a start that took resolves to `running` and
+one that failed resolves to `error`. The resting pair is therefore never
+knob-on + link-off — that combination is not a state this panel comes to rest in.
+
+Only an intent to **start** projects. A stop keeps the polled state, so the link glyph
+stays lit until a document confirms the proxy is really down, and *"no link glyph"*
+keeps meaning *"nothing is established"*.
+
+Deliberately **not** solved by polling faster during an action. That would make the
+CLI's own `starting` observable, but it buys a truthful transient with a standing cost
+on every action, and the transient it buys is the one the operator cares about least:
+the resting state after the action is what carries the outcome.
+
+The three properties that stay on polled truth, not `displayState`:
+`CursorSurface.current` (reserved for `running`), `ToggleSwitch.checked`'s fallback
+(only consulted when no intent is held, where the two are equal by construction), and
+`errorDetail` (a retry renders `starting…`, but hovering still surfaces what the
+previous attempt failed with).
+
 ### Glyph family
 
 All glyphs come from the **Nerd Font MDI range** (`U+F0000`–`U+F1AF0`), which resolves
@@ -403,6 +439,14 @@ flips. Bind any of them to a transient state and the panel visibly jumps:
 | `ToggleSwitch.interactive` | `cursorRing: interactive`, `_pad: cursorRing ? cursorPad : 0`, `implicitWidth: trackWidth + _pad*2` | Switch shrinks `54×34` → `42×22` |
 | `visible` on a reveal inside a `Row` | `Row` skips invisible children entirely | Row collapses: header height jumps, siblings anchored to its edge slide |
 | `Button.iconText` `""` → glyph | Icon `Text` is `visible: iconText !== ""` inside a Row with `controlGap` | Button widens, moving `PanelHero.trailingInset` and reflowing the title |
+
+A fourth trap in the same family, not geometric but the same shape of mistake —
+a transient state leaving a permanent mark. `RotationAnimation on rotation` is a
+**value source**: it takes the property over and keeps its last value when it stops,
+so the `rotation: 0` binding it replaced is *not* restored. Every spinner therefore
+needs `onRunningChanged: if (!running) <target>.rotation = 0`, or the glyph settles
+at whatever angle the animation happened to end on. Both spinners here carry it.
+
 
 > **Rule.** Never bind a geometry-affecting property to a transient state — busy,
 > hover, or cursor. Reveal with **`opacity`** and gate input with **`enabled`**

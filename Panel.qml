@@ -116,11 +116,11 @@ Panel {
   // The full error.detail goes in a PanelToolTip, not the row: it runs to
   // 100+ characters and would wrap rows to three lines, destroying the
   // uniform row height the cursor depends on (chrome.md §4).
-  function statusLine(conn) {
+  function statusLine(conn, state) {
     var where = conn.address + ":" + conn.port
-    if (conn.state === "error")
+    if (state === "error")
       return (conn.error && conn.error.code ? conn.error.code : "error") + "  ·  " + where
-    return root.stateLabel(conn.state) + "  ·  " + where
+    return root.stateLabel(state) + "  ·  " + where
   }
 
   // Detail only, never the code: the code is already in the status line two
@@ -886,6 +886,30 @@ Panel {
     // Not `state`: QQuickItem already has one (the state-machine name), and
     // shadowing it is both a qmllint property-override and a real footgun.
     readonly property string healthState: row.conn.state
+
+    // What the row *renders*. The polled Health state, except while a start we
+    // asked for is still outstanding — then the row renders `starting`, so the
+    // knob throw and every state channel agree that work is in flight.
+    //
+    // Needed because the CLI's own `starting` is nearly unreachable from a
+    // panel action: `start` blocks until the port opens (--wait-ms, default
+    // 10000), so the guaranteed post-action poll always observes the finished
+    // state. Catching a real `starting` document needs a pollTimer tick inside
+    // the ~1s start window against a 2s interval, which mostly does not happen.
+    //
+    // Truth still wins, it just lands second. The first document to arrive with
+    // no action in flight drops the intent (settleIntents), so a start that
+    // took resolves to `running` and one that failed resolves to `error`. The
+    // resting pair is never knob-on + link-off.
+    //
+    // Only an intent to *start* projects. A stop keeps the polled state, so the
+    // link glyph stays lit until a document confirms the proxy is really down —
+    // "no link glyph" keeps meaning "nothing is established".
+    readonly property string displayState: {
+      if (row.conn.state === "running" || row.conn.state === "starting") return row.conn.state
+      if (root.hasIntent(row.conn.id) && root.intentFor(row.conn.id)) return "starting"
+      return row.conn.state
+    }
     readonly property string detail: root.errorDetail(row.conn)
 
     hasCursor: root.cursorActive && root.focusSection === row.section
@@ -936,20 +960,26 @@ Panel {
         anchors.verticalCenter: parent.verticalCenter
         width: Style.space(20)
         height: Style.font.heading
-        text: root.stateGlyph(row.healthState)
+        text: root.stateGlyph(row.displayState)
         fontFamily: root.fontFamily
         fontSize: Style.font.heading
-        color: root.stateColor(row.healthState)
+        color: root.stateColor(row.displayState)
         transformOrigin: Item.Center
         rotation: 0
 
-        // Same idiom as Button.iconSpinning.
+        // Same idiom as Button.iconSpinning, and it needs the same reset the
+        // Group button's spinner has: `RotationAnimation on rotation` is a value
+        // source, so it takes the property over and *keeps its last value* when
+        // it stops — the `rotation: 0` above is not restored. Without this, the
+        // link glyph settles at whatever angle the spin happened to end on.
+        // Latent until now only because `starting` was almost never rendered.
         RotationAnimation on rotation {
           from: 0
           to: 360
           duration: 900
           loops: Animation.Infinite
-          running: row.healthState === "starting"
+          running: row.displayState === "starting"
+          onRunningChanged: if (!running) stateGlyph.rotation = 0
         }
       }
 
@@ -966,7 +996,7 @@ Panel {
         Text {
           width: parent.width
           text: row.conn.name
-          color: root.nameColor(row.healthState)
+          color: root.nameColor(row.displayState)
           font.family: root.fontFamily
           font.pixelSize: Style.font.body
           elide: Text.ElideRight
@@ -974,8 +1004,8 @@ Panel {
 
         Text {
           width: parent.width
-          text: root.statusLine(row.conn)
-          color: root.statusColor(row.healthState)
+          text: root.statusLine(row.conn, row.displayState)
+          color: root.statusColor(row.displayState)
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
           elide: Text.ElideRight
