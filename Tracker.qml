@@ -58,6 +58,29 @@ Item {
   readonly property bool busy: actionProc.running
   property string busyKey: ""
 
+  // Document provenance. `busy` covers actionProc only, so it cannot answer the
+  // question a UI holding optimistic state actually has: *was this document
+  // observed after my action finished?* A status poll started before an action
+  // can exit after it, carrying pre-action truth, and a consumer that treats any
+  // fresh document as authoritative will settle against it.
+  //
+  // actionEpoch counts actions whose outcome is settled — bumped when one exits,
+  // and also when one is *refused*, so a refused action still advances the
+  // counter and a consumer holding state for it can let go rather than waiting
+  // forever on an action that never ran.
+  //
+  // documentEpoch is the actionEpoch that was current when the poll producing
+  // the last applied document was *launched*. So `documentEpoch > e`, for an `e`
+  // captured at the moment of acting, means "observed after that action
+  // settled". Only successful Status documents advance it: a failed poll says
+  // nothing about the world.
+  readonly property int actionEpoch: root._actionEpoch
+  readonly property int documentEpoch: root._documentEpoch
+
+  property int _actionEpoch: 0
+  property int _documentEpoch: -1
+  property int _statusLaunchEpoch: -1
+
   // True once at least one status or version attempt has finished (success
   // or failure) — lets the UI distinguish "still loading" from "loaded and
   // degraded".
@@ -160,6 +183,7 @@ Item {
       return
     }
     root._hasGoodDocument = true
+    root._documentEpoch = root._statusLaunchEpoch
     root._clearDegraded()
     root.runningCount = parsed.running
     root.errorCount = parsed.error
@@ -196,8 +220,14 @@ Item {
   }
 
   function _checkStatus() {
-    if (statusProc.running) return
+    // A poll asked for while one is in flight is *retried*, never dropped.
+    // delayedRefresh is the only guaranteed post-action read, and silently
+    // losing it left the panel on pre-action truth until the next tick.
+    // Self-limiting: at most one retry is ever armed, and a status poll here
+    // measures ~23ms against this 50ms retry.
+    if (statusProc.running) { pendingStatus.restart(); return }
     _statusExited = false
+    root._statusLaunchEpoch = root._actionEpoch
     statusProc.command = [root.cliPath, "status", "--json"]
     statusProc.running = true
   }
@@ -207,11 +237,16 @@ Item {
     if (!root._versionOk) {
       console.warn("Tracker: ignoring " + verb + " — version gate has not passed (degraded: " +
         (root.degraded ? root.degraded.kind : "not yet checked") + ").")
+      // Refused, but settled: advance the epoch so a consumer holding
+      // optimistic state for this action drops it on the next document instead
+      // of waiting on an action that will never run.
+      root._actionEpoch++
       return
     }
     var args = _targetArgs(target)
     if (args === null) {
       console.warn("Tracker: invalid action target for " + verb + ":", JSON.stringify(target))
+      root._actionEpoch++
       return
     }
     root.busyKey = _targetKey(target)
@@ -260,6 +295,16 @@ Item {
     interval: 500
     repeat: false
     onTriggered: root.refresh()
+  }
+
+  // Re-runs a poll _checkStatus could not start because one was in flight.
+  // Only _checkStatus's own bail path arms it, so exactly one retry is pending
+  // at a time.
+  Timer {
+    id: pendingStatus
+    interval: 50
+    repeat: false
+    onTriggered: root._checkStatus()
   }
 
   // ---- Processes (docs/modules.md "Process layout") -------------------------
@@ -347,6 +392,7 @@ Item {
     onExited: function (exitCode) {
       root._actionExited = true
       root.busyKey = ""
+      root._actionEpoch++
       if (exitCode !== 0) {
         var out = String(actionStdout.text || "").trim()
         var err = String(actionStderr.text || "").trim()
@@ -359,6 +405,7 @@ Item {
       if (!running && !root._actionExited) {
         root._actionExited = true
         root.busyKey = ""
+        root._actionEpoch++
         console.warn("Tracker: " + root._missingCliMessage())
         delayedRefresh.restart()
       }

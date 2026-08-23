@@ -50,6 +50,8 @@ Panel {
   readonly property var connectionList: tracker ? tracker.connections : []
   readonly property bool trackerBusy: tracker ? tracker.busy : false
   readonly property string busyKey: tracker ? tracker.busyKey : ""
+  readonly property int actionEpoch: tracker ? tracker.actionEpoch : 0
+  readonly property int documentEpoch: tracker ? tracker.documentEpoch : -1
 
   readonly property color fg: root.bar ? root.bar.foreground : Color.foreground
   readonly property string fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
@@ -317,6 +319,10 @@ Panel {
     root.settleIntents()
     Qt.callLater(root.clampCursor)
   }
+  // Content and provenance are separate triggers: connections is a fresh array
+  // on every apply so this is usually redundant, but settling must not depend on
+  // that implementation detail of Tracker.
+  onDocumentEpochChanged: root.settleIntents()
   onGroupListChanged: Qt.callLater(root.clampCursor)
   onDegradedChanged: Qt.callLater(root.clampCursor)
 
@@ -390,6 +396,11 @@ Panel {
   // does not re-evaluate bindings that read it.
   property var intents: ({})
 
+  // Tracker's actionEpoch at the moment the outstanding intents were written.
+  // One value, not one per id: Panel's command guard means at most one action is
+  // ever outstanding, so there is only ever one generation of intents to settle.
+  property int intentEpoch: -1
+
   function hasIntent(id) {
     return Object.prototype.hasOwnProperty.call(root.intents, id)
   }
@@ -402,6 +413,7 @@ Panel {
     var next = {}
     for (var k in root.intents) next[k] = root.intents[k]
     next[id] = on
+    root.intentEpoch = root.actionEpoch
     root.intents = next
   }
 
@@ -409,18 +421,30 @@ Panel {
     var next = {}
     for (var k in root.intents) next[k] = root.intents[k]
     for (var i = 0; i < list.length; i++) next[list[i].id] = on
+    root.intentEpoch = root.actionEpoch
     root.intents = next
   }
 
-  // The first document to land once no action is in flight is the authority,
+  // The first document *observed after the action settled* is the authority,
   // whatever it says: it confirms the intent (glyph goes live, knob stays), or
   // contradicts it (knob slides back, which is the operator's signal that the
-  // start or stop did not take). Also self-healing — an action that never ran,
-  // because Tracker's version gate refused it, drops its intent on the next
-  // poll rather than leaving the knob stuck.
+  // start or stop did not take).
+  //
+  // "After the action settled" is why this reads documentEpoch and not just
+  // `busy`. Tracker's `busy` covers actionProc alone, so a status poll started
+  // before the action can exit after it — and settling on that clears the intent
+  // against a document that predates the very thing it is supposed to confirm.
+  // Visible as the knob falling back and the projected `starting` glyph dropping
+  // mid-action, then both correcting 500ms later: the same bounce 3c19e07 fixed,
+  // one layer down, at document provenance rather than at `busy`.
+  //
+  // Still self-healing: Tracker advances actionEpoch when it *refuses* an action
+  // too, so an action its version gate rejected drops its intent on the next
+  // document rather than leaving the knob stuck.
   function settleIntents() {
     if (root.trackerBusy) return
     if (Object.keys(root.intents).length === 0) return
+    if (root.documentEpoch <= root.intentEpoch) return
     root.intents = ({})
   }
 

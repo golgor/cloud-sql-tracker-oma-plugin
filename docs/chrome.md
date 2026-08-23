@@ -425,12 +425,22 @@ click", and `cursorRing` derives from it — see the geometry rule below.
    that gap `checked` falls back to the stale state, so a single click renders as
    **On → Off → On**: three transitions for one action.
 
-   The first document to land while no action is in flight settles every intent,
+   The first document **observed after the action settled** carries the answer,
    whatever it says. It either confirms (knob stays, glyph goes live) or contradicts
    (knob slides back and the glyph resolves to `stopped` or `error` — the operator's
    signal that the start or stop did not take).
-   Settling unconditionally also self-heals: an action Tracker's version gate refused
-   to run drops its intent on the next poll instead of leaving the knob stuck.
+
+   **"Observed after" is a provenance test, not a timing one.** `tracker.busy` covers
+   the action process alone, so a status poll started *before* an action can exit
+   *after* it and land carrying pre-action truth — settling on that clears the intent
+   against a document predating the very thing it is meant to confirm. Capture
+   `tracker.actionEpoch` when the intent is written and settle only once
+   `tracker.documentEpoch` exceeds it (`docs/modules.md`, "Document provenance").
+
+   Self-healing survives that gate, by construction rather than by accident: Tracker
+   advances `actionEpoch` when it **refuses** an action too, so a start its version
+   gate rejected drops its intent on the next document instead of leaving the knob
+   stuck.
 
    Reassign the intent map wholesale; mutating a `var` in place does not re-evaluate
    bindings that read it.
