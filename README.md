@@ -1,18 +1,14 @@
 # cloud-sql-tracker-oma-plugin
 
-Omarchy shell bar plugin for [cloud-sql-tracker](https://github.com/golgor/cloud-sql-tracker).
+A fast, keyboard-first Omarchy bar widget to monitor and control your [Google Cloud SQL Auth Proxies](https://github.com/GoogleCloudPlatform/cloud-sql-proxy) at a glance.
 
-Shows an icon + running proxy count in the bar. The dropdown starts and stops
-[Cloud SQL Auth Proxy](https://github.com/GoogleCloudPlatform/cloud-sql-proxy)
-connections by id, group, or stop-all. Config and process ownership stay with
-the CLI.
+Toggle database proxies individually, spin up entire environment groups (`backend`, `frontend`, `staging`), or hit emergency **Stop all** — directly from your status bar without context-switching to terminal windows.
+
+Powered by the external [`cloud-sql-tracker`](https://github.com/golgor/cloud-sql-tracker) control plane CLI.
 
 ## Status
 
-**Dogfoodable v1.** Grouped list chrome, Tracker poll/start/stop, disabled
-Connection handling, and local dev-link are on `main`. Pair with CLI
-**≥ 0.1.1** so Status includes `connections[].enabled` (older CLIs still work;
-missing `enabled` is treated as true).
+**v1.0 Stable.** Features house-style grouped list UI, live status polling, environment group actions, setup preflight, and full keyboard navigation (`j`/`k`, `Enter`, `h`/`l`). Recommends CLI **≥ 0.1.1** for disabled-connection labeling (backward-compatible with older CLI versions).
 
 | | |
 |--|--|
