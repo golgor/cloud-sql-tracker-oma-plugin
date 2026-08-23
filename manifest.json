@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.golgor.cloud-sql-tracker",
   "name": "Cloud SQL Tracker",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "author": "golgor",
   "license": "MIT",
   "homepage": "https://github.com/golgor/cloud-sql-tracker-oma-plugin",
