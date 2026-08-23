@@ -124,9 +124,11 @@ Not the same as Connection Health `error`. When `Tracker.degraded !== null`, rep
 | `cli_missing` | Install CLI or set `cliPath` |
 | `cli_old` | Upgrade CLI / adjust `minCliVersion` |
 | `schema` | Status document `version` ≠ 1 — upgrade plugin or CLI together |
-| `status_failed` | Status command failed — message/stderr hint |
+| `status_failed` | Status command failed — message/stderr hint (includes **invalid config JSON** / config load errors: CLI exits 2 on `status --json`) |
 
 When not degraded but **no Connections are published** in the Status document: empty copy — configure Connections via CLI-owned `connections.json` (path as text only; **do not** open or parse the file in-plugin). (UI progress counts are enabled-only; emptiness uses published row count so an all-disabled config still lists rows.)
+
+**Action failures are not Degraded.** A healthy Status with a failed start (e.g. unresolved `proxy_bin`) keeps the switchboard and shows a dismissible banner from `Tracker.lastActionError` (issue #27). Intent still settles so the knob does not stick On.
 
 ### Explicit non-goals (v1 chrome)
 

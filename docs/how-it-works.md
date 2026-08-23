@@ -101,7 +101,9 @@ Field catalog lives in the CLI repo: `docs/status-document.v1.md`.
 - Per **Connection**: health glyph, name, `state · address:port` (or
   `disabled · …`), toggle.
 - **Degraded** replaces the whole switchboard (CLI missing/old, bad schema,
-  status failed).
+  status failed — including invalid `connections.json`).
+- **Action failure banner** (not Degraded): failed start/stop keeps the list and
+  shows the CLI message (e.g. bad `proxy_bin`). Dismiss or succeed to clear.
 - Keyboard: `j`/`k`, `Enter`, `h`/`l`, `Esc`, `Tab` — see README and `chrome.md`.
 
 ### Intent and busy
