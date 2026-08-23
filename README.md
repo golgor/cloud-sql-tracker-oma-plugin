@@ -34,12 +34,19 @@ missing `enabled` is treated as true).
 ## Install
 
 ```bash
-# 1) Install the CLI (see cloud-sql-tracker README), then:
+# Install from git and enable on the bar
 omarchy plugin add https://github.com/golgor/cloud-sql-tracker-oma-plugin.git --enable
 ```
 
 Place **Cloud SQL Tracker** on the bar (category *Development*), or add it in
 `~/.config/omarchy/shell.json`.
+
+## Removal
+
+```bash
+# Remove an installed plugin
+omarchy plugin remove io.github.golgor.cloud-sql-tracker
+```
 
 Validate a local checkout:
 
