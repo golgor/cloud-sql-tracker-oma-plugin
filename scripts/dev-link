@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # scripts/dev-link — symlink this checkout into Omarchy's plugin directory.
 #
-# After this runs, Omarchy's shell loads this git checkout directly. Edits
-# saved here hot-reload without a re-copy. See README.md "Local development"
-# and docs/DESIGN.md for the install contract.
+# After this runs, Omarchy's shell loads this git checkout directly (no re-clone).
+# QML edits still need `omarchy restart shell` — the shell does not hot-reload
+# a symlinked plugin tree. See README.md "Local development" and AGENTS.md.
 #
 # Safe to re-run. Never deletes a real (non-symlink) plugin directory.
 set -euo pipefail

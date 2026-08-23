@@ -126,7 +126,7 @@ Not the same as Connection Health `error`. When `Tracker.degraded !== null`, rep
 | `schema` | Status document `version` ≠ 1 — upgrade plugin or CLI together |
 | `status_failed` | Status command failed — message/stderr hint |
 
-When not degraded but `total === 0`: empty copy — configure Connections via CLI-owned `connections.json` (path as text only; **do not** open or parse the file in-plugin).
+When not degraded but **no Connections are published** in the Status document: empty copy — configure Connections via CLI-owned `connections.json` (path as text only; **do not** open or parse the file in-plugin). (UI progress counts are enabled-only; emptiness uses published row count so an all-disabled config still lists rows.)
 
 ### Explicit non-goals (v1 chrome)
 
@@ -162,7 +162,7 @@ Order is indicative once install + Tracker exist; adjust on the map as tickets l
 3. Bar: count + warning affordance
 4. Panel: Grouped list + per-row toggle + group start/stop + stop all
 5. Empty / degraded copy polish
-6. Dogfood + remaining docs (`AGENTS.md`, how-it-works)
+6. Dogfood + remaining docs (`AGENTS.md`, how-it-works) — docs: [`AGENTS.md`](../AGENTS.md), [`docs/how-it-works.md`](./how-it-works.md)
 7. Chrome pass: house-style Panel (`PanelHero`, `CursorSurface` rows, `ToggleSwitch`,
    keyboard cursor), health-state glyph system, `380 × 560` — spec in
    [`docs/chrome.md`](./chrome.md), verified with
