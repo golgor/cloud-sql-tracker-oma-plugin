@@ -121,11 +121,14 @@ The plugin **only** shells out to:
 ```bash
 cloud-sql-tracker --version
 cloud-sql-tracker status --json
+cloud-sql-tracker doctor --json   # once when the panel opens
 cloud-sql-tracker start <id|--group G|--all>
 cloud-sql-tracker stop  <id|--group G|--all>
 ```
 
-It does **not** read or write the connections config file.
+It does **not** read or write the connections config file. Doctor hard-fail
+hides the connection list (setup unusable). Per-connection start failures show
+on the row after setup passes.
 
 Disabled Connections (`enabled: false` in config, exposed on Status) stay
 visible in the panel but are not start targets. Bar and group counts use

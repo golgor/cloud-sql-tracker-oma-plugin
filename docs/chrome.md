@@ -608,7 +608,12 @@ verbatim at `Style.font.bodySmall`, `alpha(fg, 0.7)`.
 | `cli_old` | `cloud-sql-tracker is too old` |
 | `schema` | `Status document not understood` |
 | `status_failed` | `Status check failed` |
+| `doctor_failed` | `Setup check failed` |
 | *(unknown)* | `cloud-sql-tracker unavailable` |
+
+`doctor_failed` comes from a one-shot `doctor --json` on panel open (not a poll).
+Hard fail hides the switchboard like every other Degraded kind. Per-connection
+start failures after doctor passed are **row** `actionErrors`, not a banner.
 
 The unknown fallback is required: `degraded.kind` is a `Tracker` value, and a future
 kind must not render a blank body.
@@ -684,7 +689,7 @@ the moment a theme customises them.
   sanctioned exception — §2, §4 note 1.
 - No `Process`, argv, or `Model.js` in `Panel.qml` / `BarWidget.qml`. Bind to
   `Tracker` only (`docs/modules.md`).
-- No second pane, no tabs, no `restart` / `doctor` / `logs` — `DESIGN.md` non-goals.
+- No second pane, no tabs, no `restart` / interactive doctor tab / `logs` — `DESIGN.md` non-goals. Doctor **preflight on open** (full-body Degraded) is in scope.
 - No re-sorting Groups or Connections. Status document order is the contract.
 
 ---

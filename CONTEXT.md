@@ -29,7 +29,7 @@ A display and bulk-action label on Connections (e.g. `fe`, `backend`, `iot`).
 _Avoid_: Environment, project (GCP project is part of instance name)
 
 **Degraded**:
-A Tracker condition where the bar and panel must not pretend proxies are fine — CLI missing, CLI too old, Status schema mismatch, or status command failure.
+A Tracker condition where the bar and panel must not pretend proxies are fine — CLI missing, CLI too old, Status schema mismatch, status command failure, or doctor hard-fail on panel open (`doctor_failed`).
 _Avoid_: Error alone (reserved for Connection Health state `error`), broken, offline
 
 **Action target**:

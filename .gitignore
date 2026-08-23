@@ -4,3 +4,8 @@
 .DS_Store
 *.qmlc
 *.jsc
+
+# Local agent / tool artifacts (not product)
+.omc/
+codedb.snapshot
+docs/review/

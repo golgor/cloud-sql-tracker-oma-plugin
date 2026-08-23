@@ -61,12 +61,14 @@ The plugin shells out **only** to:
 ```text
 cloud-sql-tracker --version
 cloud-sql-tracker status --json
+cloud-sql-tracker doctor --json
 cloud-sql-tracker start <id|--group G|--all>
 cloud-sql-tracker stop  <id|--group G|--all>
 ```
 
 - Do **not** read or write `~/.config/cloud-sql-tracker/connections.json`.
-- Do **not** add in-panel `restart`, `doctor`, or `logs` on the current map.
+- `doctor --json` is **panel-open preflight only** (not a poll loop). Hard fail → Degraded full body.
+- Do **not** add in-panel `restart`, interactive doctor tab, or `logs` on the current map.
 - CLI discovery: `PATH` or absolute `cliPath` setting only.
 - Status schema `version` must be `1`. Unknown JSON fields: ignore.
 - `connections[].enabled` missing → treat as `true`. UI counts are
@@ -86,7 +88,7 @@ BarWidget / Panel  →  Tracker  →  Process(cloud-sql-tracker)  →  stdout
 |------|------|
 | `BarWidget.qml` | Thin host: button, Loader, injectPanel |
 | `Panel.qml` | Chrome Adapter: cursor, intent, displayState; **calls Tracker only** |
-| `Tracker.qml` | Deep module: poll, version gate, start/stop, degraded |
+| `Tracker.qml` | Deep module: poll, version gate, doctor-on-open, start/stop, degraded |
 | `Model.js` | Pure Status parse (no QML, no Process) |
 | `manifest.json` | `kinds: ["bar-widget"]`; settings keys |
 

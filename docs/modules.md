@@ -11,7 +11,7 @@ Deep-module layout for implement tickets. Chrome (how it looks) is separate — 
 | Choice | Value |
 |--------|--------|
 | Host shape | **Nested** scaffold: `BarWidget.qml` loads `Panel.qml` (`Loader { active: true }`). |
-| Deep module | **Tracker** (`Tracker.qml`) — poll, version gate, start/stop, last Status view. |
+| Deep module | **Tracker** (`Tracker.qml`) — poll, version gate, **doctor-on-open**, start/stop, last Status view. |
 | Pure internal seam | **`Model.js`** — parse/validate Status JSON only. |
 | UI | Bar and Panel **bind and call** Tracker only. No `Process` in UI files. |
 | Shell `kind: "service"` | **No** for v1. |
@@ -19,9 +19,9 @@ Deep-module layout for implement tickets. Chrome (how it looks) is separate — 
 
 **Why:** One deep interface keeps CLI I/O local; nested scaffold already matches weather/clock and this repo; host-level service is overkill and uncertain for third-party plugins.
 
-**Discarded:** Combined `barWidget` → single Panel entry (churn, no extra depth); fat Panel/Bar with inline Process; two *external* modules (Cli + Model) that every caller must compose; `execDetached` for start/stop.
+**Discarded:** Combined `barWidget` → single Panel entry (churn, no extra depth); fat Panel/Bar with inline Process; two *external* modules (Cli + Model) that every caller must compose; `execDetached` for start/stop; continuous doctor poll.
 
-**Unchanged:** CLI-only contract (`--version`, `status --json`, `start`/`stop`); no reads of `connections.json`; manifest settings keys.
+**Unchanged:** CLI-only contract (`--version`, `status --json`, `start`/`stop`, and `doctor --json` as **panel-open preflight only** — not on the status poll timer); no reads of `connections.json`; manifest settings keys.
 
 ## Files
 
@@ -80,11 +80,11 @@ Callers (Bar, Panel, later tests against a fake) learn only this surface.
 | `connections` | Connection rows for the panel |
 | `degraded` | `null` when usable; else `{ kind, message }` |
 | `busy` / `busyKey` | Action in flight (optional key for row spinners) |
-| `lastActionError` | `null` or `{ verb, message, exitCode }` after a failed/refused start or stop. Cleared on the next successful action or `clearActionError()`. Not Degraded — Status may still be healthy (issue #27). |
+| `actionErrors` | Map `id → { message, verb, exitCode }` for failed start/stop on that Connection. Cleared for the action's target scope on success. Not Degraded — Status may still be healthy (issue #31). |
 | `actionEpoch` / `documentEpoch` | Document provenance — see below |
 | `loaded` | At least one status or version attempt finished |
 
-**`degraded.kind` (v1):** `cli_missing` | `cli_old` | `schema` | `status_failed`
+**`degraded.kind` (v1):** `cli_missing` | `cli_old` | `schema` | `status_failed` | `doctor_failed`
 
 When `degraded !== null`, UI must not present a healthy empty switchboard as success.
 
@@ -93,8 +93,9 @@ When `degraded !== null`, UI must not present a healthy empty switchboard as suc
 | Situation | CLI | Tracker |
 |-----------|-----|---------|
 | Invalid / unloadable `connections.json` | `status --json` exit **2**, stderr message | `degraded.kind === "status_failed"`, message from stderr |
-| Bad `proxy_bin` (valid config) | `status` ok (`stopped`); `start` exit **3** | Switchboard stays up; `lastActionError` carries the dependency message |
-| Single-id start refused (disabled, …) | exit **2** | `lastActionError` (and no sticky start intent once settled) |
+| Bad `proxy_bin` / doctor hard-fail | `doctor --json` `ok: false` | `degraded.kind === "doctor_failed"` — **no connection list** |
+| Start fails after doctor passed (per Connection) | `start` non-zero | `actionErrors[id]` — row paints error; no global banner |
+| Single-id start refused (disabled, …) | exit **2** | `actionErrors[id]` (and no sticky start intent once settled) |
 
 #### Document provenance
 
@@ -121,9 +122,10 @@ silently losing it left callers on pre-action truth until the next tick.
 | Command | Meaning |
 |---------|---------|
 | `refresh()` | Run status poll now (and version gate when needed) |
+| `runDoctor()` | One-shot `doctor --json` (panel open). Not on the status poll timer. |
 | `start(target)` | `cloud-sql-tracker start …` then refresh |
 | `stop(target)` | `cloud-sql-tracker stop …` then refresh |
-| `clearActionError()` | Drop `lastActionError` (panel dismiss) |
+| `clearActionError(id?)` | Drop one id or all `actionErrors` |
 
 **Action target:** `{ kind: "id" | "group" | "all", id?: string, group?: string }`  
 Tracker maps that to argv. UI does **not** build argv strings.
@@ -132,7 +134,7 @@ Tracker maps that to argv. UI does **not** build argv strings.
 
 ### Not on the interface
 
-Raw stdout/stderr buffers, `Process` objects, semver internals, doctor/logs/restart, config file paths.
+Raw stdout/stderr buffers, `Process` objects, semver internals, logs/restart UIs, config file paths. Doctor is invoked only via `runDoctor()` (not continuous).
 
 ## Model.js (internal)
 
@@ -151,6 +153,7 @@ Golden fixture: sibling CLI `examples/status.v1.json` (copy or path in tests lat
 |---------|------|
 | `statusProc` | `status --json` |
 | `versionProc` | `--version` (min CLI gate) |
+| `doctorProc` | `doctor --json` (panel open only) |
 | `actionProc` | One start/stop at a time (queue or ignore if busy) |
 
 - Tracked `Quickshell.Io.Process` + `StdioCollector` (`waitForEnd`); not `execDetached` for these
