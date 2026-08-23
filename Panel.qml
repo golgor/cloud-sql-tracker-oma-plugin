@@ -518,11 +518,19 @@ Panel {
       anchors.fill: parent
       // First press only reveals the cursor, so the panel never opens with a
       // highlight already on screen (audio/Panel.qml does the same).
+      //
+      // Every branch below lands on a real target or leaves the cursor inert.
+      // Degraded and empty have no targets at all (chrome.md §6), and going
+      // active there used to leave cursorActive true with focusSection "" —
+      // harmless on its own, since moveCursor and activateCursor both bail,
+      // but the next document to arrive ran clampCursor, found "" not in
+      // visibleSections, and painted a highlight on the first Group that
+      // nobody had asked for.
       onMoveRequested: function (dx, dy) {
         if (!root.cursorActive) {
-          root.cursorActive = true
-          if (root.focusSection === "" && root.visibleSections.length > 0)
-            root.setCursor(root.visibleSections[0], -1)
+          if (root.focusSection !== "") root.cursorActive = true
+          else if (root.visibleSections.length > 0) root.setCursor(root.visibleSections[0], -1)
+          else if (root.headerAvailable) root.setCursor("header", -1)
           return
         }
         if (dy !== 0) root.moveCursor(dy)
