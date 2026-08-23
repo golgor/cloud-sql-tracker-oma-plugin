@@ -420,6 +420,13 @@ Panel {
   }
 
   // ---- Commands (Action targets — CONTEXT.md, docs/modules.md) ------------
+  //
+  // Every command is the single place busy is enforced: Tracker ignores a
+  // concurrent action silently, so a command that ran anyway would record an
+  // intent for something that never happened and leave the knob stuck until
+  // the next poll pulled it back. Guarding here rather than in each control's
+  // `enabled` means no control has to dim to stay safe — see the note on
+  // groupActions and chrome.md §5.
 
   function canStart(state) {
     return state === "stopped" || state === "error"
@@ -428,19 +435,19 @@ Panel {
   // Every command records its intent first, so group and panel-wide actions
   // throw their knobs as immediately as a single row does.
   function stopAll() {
-    if (!root.tracker) return
+    if (!root.tracker || root.trackerBusy) return
     root.setIntentForList(root.connectionList, false)
     root.tracker.stop({ kind: "all" })
   }
 
   function startGroup(name) {
-    if (!root.tracker) return
+    if (!root.tracker || root.trackerBusy) return
     root.setIntentForList(root.connectionsForGroup(name), true)
     root.tracker.start({ kind: "group", group: name })
   }
 
   function stopGroup(name) {
-    if (!root.tracker) return
+    if (!root.tracker || root.trackerBusy) return
     root.setIntentForList(root.connectionsForGroup(name), false)
     root.tracker.stop({ kind: "group", group: name })
   }
@@ -459,20 +466,20 @@ Panel {
   // running is harmless and idempotent at the CLI, and second-guessing it here
   // would make h/l silently do nothing on the row the operator is pointing at.
   function startConnection(conn) {
-    if (!root.tracker) return
+    if (!root.tracker || root.trackerBusy) return
     root.setIntent(conn.id, true)
     root.tracker.start({ kind: "id", id: conn.id })
   }
 
   function stopConnection(conn) {
-    if (!root.tracker) return
+    if (!root.tracker || root.trackerBusy) return
     root.setIntent(conn.id, false)
     root.tracker.stop({ kind: "id", id: conn.id })
   }
 
   // UI decides the verb; Tracker deliberately has no toggle().
   function toggleConnection(conn) {
-    if (!root.tracker) return
+    if (!root.tracker || root.trackerBusy) return
     var on = root.canStart(conn.state)
     root.setIntent(conn.id, on)
     if (on) root.tracker.start({ kind: "id", id: conn.id })
@@ -803,6 +810,16 @@ Panel {
         // the header's height and shifting the counts sideways every time the
         // cursor arrives. Opacity 0 items still take mouse input, so the
         // buttons gate on `enabled` instead, which disables their MouseAreas.
+        //
+        // `enabled` tracks the *reveal alone*, never `trackerBusy`.
+        // PanelActionButton paints its icon `Qt.darker(foreground, 2.0)` when
+        // disabled, and `groupBusy` is one of the two things that reveals this
+        // Row — so gating on busy here dimmed the spinner for precisely as long
+        // as it was spinning, against the "blocks clicks, dims nothing" rule
+        // (DESIGN.md, chrome.md §5). Busy is swallowed in the command functions
+        // instead, which also blocks the click *before* intent is recorded —
+        // dropping the busy term from `enabled` on its own would let a click
+        // through to a start Tracker silently ignores, stranding an intent.
         readonly property bool revealed: header.hasCursor || header.groupBusy
         opacity: revealed ? 1.0 : 0.0
 
@@ -815,7 +832,7 @@ Panel {
           tooltipText: header.groupBusy ? "Working…" : "Start group"
           foreground: root.fg
           fontFamily: root.fontFamily
-          enabled: groupActions.revealed && !root.trackerBusy
+          enabled: groupActions.revealed
           transformOrigin: Item.Center
           rotation: 0
           onHovered: function (on) { if (on) root.setCursor(header.section, -1) }
@@ -839,7 +856,7 @@ Panel {
           tooltipText: "Stop group"
           foreground: root.fg
           fontFamily: root.fontFamily
-          enabled: groupActions.revealed && !root.trackerBusy
+          enabled: groupActions.revealed
           onHovered: function (on) { if (on) root.setCursor(header.section, -1) }
           onClicked: root.stopGroup(header.g.name)
         }

@@ -282,7 +282,7 @@ pointer handling of its own:
 | `hasCursor` | `cursorActive && focusSection === "group:<g>" && selectedIndex === -1` |
 | `current` | `false` — reserve the persistent fill for `running` rows (§2) |
 | Action button reveal | `opacity: hasCursor ? 1 : 0` on the enclosing `Row`, **never `visible`** — see §5 "Geometry stability" |
-| Action button input gate | `enabled: revealed && !tracker.busy` — opacity-0 items still take clicks |
+| Action button input gate | `enabled: revealed` — opacity-0 items still take clicks, so the reveal needs both. **Not** `&& !tracker.busy`: `enabled: false` dims a `PanelActionButton`'s icon, and `groupBusy` is one of the two things that *reveals* this Row, so that gate dimmed the spinner for exactly as long as it spun. Busy is swallowed in the Panel's command functions instead — §5 |
 
 Its `MouseArea` sets `cursorActive = true`, `focusSection = "group:<g>"`,
 `selectedIndex = -1` on hover, exactly as the row's does — that shared write is what
@@ -351,10 +351,16 @@ when `actionProc.running`. So a control that stays live during another action is
 > flicker."* Feedback comes from the three positive signals below, not from taking
 > the panel away.
 
+Every command function in the Panel opens with `if (!tracker || tracker.busy) return`.
+That is the enforcement point, and it sits *before* intent is recorded — a control
+that let a click through would otherwise strand an intent on an action Tracker
+silently dropped. Each control's own gate is then only a second line of defence,
+and none of them has to dim to provide it.
+
 | Control | Blocks clicks via | Visually silent when blocked? |
 |---------|-------------------|-------------------------------|
 | Row `ToggleSwitch` | `busy: tracker.busy` | Yes — `busy` gates only `onClicked` |
-| Group start / stop | `enabled` | Yes — the Row sits at `opacity: 0` unless revealed |
+| Group start / stop | the command guard | Yes — `enabled` tracks the reveal alone, so the spinner stays at full brightness |
 | `Stop all` | `enabled` | Yes — `Button` colours derive from `selected`/`foreground`, never `enabled` |
 
 **Never `ToggleSwitch.interactive` for this.** It means "the surrounding row owns the
@@ -401,7 +407,13 @@ flips. Bind any of them to a transient state and the panel visibly jumps:
 > **Rule.** Never bind a geometry-affecting property to a transient state — busy,
 > hover, or cursor. Reveal with **`opacity`** and gate input with **`enabled`**
 > (opacity-0 items still take mouse input, so both are needed). `enabled` is safe on
-> every control here: none of their implicit sizes depend on it.
+> every control here *for geometry*: none of their implicit sizes depend on it.
+>
+> **But `enabled` is not colour-safe.** `PanelActionButton` paints its icon
+> `Qt.darker(foreground, 2.0)` when disabled — its own header comment says
+> *"`enabled` gates clicks and dims the icon."* So `enabled` may carry a reveal,
+> which is already a visual change, but never a *transient* condition on a control
+> that is visible at the time. Busy belongs in the command functions.
 
 Not affected, and safe to swap freely: `PanelActionButton.iconText`
 (`implicitWidth: size`, independent of content), and `PanelToolTip.visible`
