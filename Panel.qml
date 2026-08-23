@@ -158,9 +158,16 @@ Panel {
   // rows in their own right (selectedIndex === -1 within that section).
   // Rebuilt whenever Tracker publishes — hence the Qt.callLater in
   // keepCursorVisible below.
+  // Empty exactly when the ListView is hidden, so the cursor's world and the
+  // rendered world cannot disagree — `total === 0` matters as much as degraded,
+  // because Model.js deliberately emits Group entries for keys in the document's
+  // groups map that have no Connections (parseGroups' second loop). Without the
+  // total guard those orphan Groups became keyboard sections with nothing drawn:
+  // j landed a cursor on an unrendered header, and Enter fired startGroup on an
+  // empty Group while the panel displayed the empty body.
   readonly property var flatRows: {
     var out = []
-    if (root.degraded !== null) return out
+    if (root.degraded !== null || root.total === 0) return out
     for (var i = 0; i < root.groupList.length; i++) {
       var g = root.groupList[i]
       out.push({ kind: "group", group: g.name, g: g })
@@ -193,9 +200,12 @@ Panel {
   readonly property bool headerAvailable: root.degraded === null && root.total > 0
   readonly property bool headerHasCursor: root.cursorActive && root.focusSection === "header"
 
+  // Same guard as flatRows, and for the same reason — these two must agree with
+  // the ListView's own `degraded === null && total > 0` or the cursor can point
+  // at something that is not on screen.
   readonly property var visibleSections: {
     var list = []
-    if (root.degraded !== null) return list
+    if (root.degraded !== null || root.total === 0) return list
     for (var i = 0; i < root.groupList.length; i++) list.push("group:" + root.groupList[i].name)
     return list
   }
