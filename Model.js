@@ -44,6 +44,10 @@ function parseStatusDocument(text) {
   }
 
   var connections = parseConnections(parsed.connections)
+  // UI counts are enabled-only (issue #26). Document totals still include
+  // disabled rows; consumers that need "is the list empty?" use
+  // connections.length, not `total`.
+  var aggregates = enabledAggregates(connections)
 
   return {
     ok: true,
@@ -51,11 +55,11 @@ function parseStatusDocument(text) {
     version: 1,
     ts: typeof parsed.ts === "string" ? parsed.ts : null,
     cliVersion: typeof parsed.cli_version === "string" ? parsed.cli_version : null,
-    running: toCount(parsed.running),
-    starting: toCount(parsed.starting),
-    error: toCount(parsed.error),
-    stopped: toCount(parsed.stopped),
-    total: toCount(parsed.total),
+    running: aggregates.running,
+    starting: aggregates.starting,
+    error: aggregates.error,
+    stopped: aggregates.stopped,
+    total: aggregates.total,
     groups: parseGroups(parsed.groups, connections),
     connections: connections
   }
@@ -86,6 +90,8 @@ function parseGroups(rawGroups, connections) {
   var names = []
   var seen = {}
 
+  // Group order: first appearance in connections (including disabled), then
+  // any orphan keys still present in the document's groups map.
   for (var i = 0; i < connections.length; i++) {
     var name = connections[i].group
     if (name !== "" && !seen[name]) {
@@ -102,16 +108,59 @@ function parseGroups(rawGroups, connections) {
   }
 
   return names.map(function (name) {
-    var counters = source[name] || {}
-    return {
-      name: name,
-      running: toCount(counters.running),
-      starting: toCount(counters.starting),
-      error: toCount(counters.error),
-      stopped: toCount(counters.stopped),
-      total: toCount(counters.total)
-    }
+    return groupEnabledCounts(name, connections)
   })
+}
+
+// Per-group counters over enabled members only (#26). A group that only has
+// disabled Connections still appears (total 0) so the panel can show them.
+function groupEnabledCounts(name, connections) {
+  var running = 0
+  var starting = 0
+  var error = 0
+  var stopped = 0
+  var total = 0
+  for (var i = 0; i < connections.length; i++) {
+    var c = connections[i]
+    if (c.group !== name || !c.enabled) continue
+    total++
+    if (c.state === "running") running++
+    else if (c.state === "starting") starting++
+    else if (c.state === "error") error++
+    else stopped++
+  }
+  return {
+    name: name,
+    running: running,
+    starting: starting,
+    error: error,
+    stopped: stopped,
+    total: total
+  }
+}
+
+function enabledAggregates(connections) {
+  var running = 0
+  var starting = 0
+  var error = 0
+  var stopped = 0
+  var total = 0
+  for (var i = 0; i < connections.length; i++) {
+    var c = connections[i]
+    if (!c.enabled) continue
+    total++
+    if (c.state === "running") running++
+    else if (c.state === "starting") starting++
+    else if (c.state === "error") error++
+    else stopped++
+  }
+  return {
+    running: running,
+    starting: starting,
+    error: error,
+    stopped: stopped,
+    total: total
+  }
 }
 
 function parseConnections(rawConnections) {
@@ -128,6 +177,8 @@ function parseConnections(rawConnections) {
       state: parseHealthState(c.state),
       port: toCount(c.port),
       address: typeof c.address === "string" ? c.address : "",
+      // Missing field (older CLI) → true. Only explicit false is disabled.
+      enabled: c.enabled !== false,
       error: parseConnectionError(c.error)
     })
   }

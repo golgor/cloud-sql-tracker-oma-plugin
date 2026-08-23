@@ -48,6 +48,8 @@ Panel {
   readonly property int errorCount: tracker ? tracker.errorCount : 0
   readonly property var groupList: tracker ? tracker.groups : []
   readonly property var connectionList: tracker ? tracker.connections : []
+  // Document row count (includes disabled). Enabled-only progress uses `total`.
+  readonly property int publishedCount: connectionList.length
   readonly property bool trackerBusy: tracker ? tracker.busy : false
   readonly property string busyKey: tracker ? tracker.busyKey : ""
   readonly property int actionEpoch: tracker ? tracker.actionEpoch : 0
@@ -84,6 +86,8 @@ Panel {
     if (state === "running") return root.glyphRunning
     if (state === "starting") return root.glyphStarting
     if (state === "error") return root.glyphError
+    // disabled uses link-off at lower alpha (stateColor), not a fifth glyph —
+    // geometry-stable with stopped and still readable as "not in service".
     return root.glyphStopped
   }
 
@@ -91,6 +95,7 @@ Panel {
     if (state === "running") return root.fg
     if (state === "starting") return Color.accent
     if (state === "error") return Color.urgent
+    if (state === "disabled") return Util.alpha(root.fg, 0.35)
     return Util.alpha(root.fg, 0.55)
   }
 
@@ -99,12 +104,17 @@ Panel {
   // background" on dark themes. Measured over the 22 installed themes it
   // inverts on the four light ones and is a no-op on `white` (foreground
   // #000000, value already 0). chrome.md §1.
+  // `disabled` is not a Health state; callers pass displayState or the
+  // synthetic "disabled" token from ConnectionRow.
   function nameColor(state) {
+    if (state === "disabled") return Util.alpha(root.fg, 0.55)
     return state === "stopped" ? Util.alpha(root.fg, 0.72) : root.fg
   }
 
   function statusColor(state) {
-    return state === "error" ? Color.urgent : Util.alpha(root.fg, 0.55)
+    if (state === "error") return Color.urgent
+    if (state === "disabled") return Util.alpha(root.fg, 0.4)
+    return Util.alpha(root.fg, 0.55)
   }
 
   function stateLabel(state) {
@@ -120,6 +130,10 @@ Panel {
   // uniform row height the cursor depends on (chrome.md §4).
   function statusLine(conn, state) {
     var where = conn.address + ":" + conn.port
+    // Config policy, not Health: disabled rows stay visible but are not
+    // start targets (issue #26). Prefer this label over a projected start.
+    if (conn.enabled === false)
+      return "disabled  ·  " + where
     if (state === "error")
       return (conn.error && conn.error.code ? conn.error.code : "error") + "  ·  " + where
     return root.stateLabel(state) + "  ·  " + where
@@ -142,6 +156,19 @@ Panel {
       if (root.connectionList[i].group === name) list.push(root.connectionList[i])
     }
     return list
+  }
+
+  // Start targets only (#26). Stop may still include disabled (CLI no-op).
+  function enabledConnections(list) {
+    var out = []
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].enabled !== false) out.push(list[i])
+    }
+    return out
+  }
+
+  function isConnEnabled(conn) {
+    return !conn || conn.enabled !== false
   }
 
   function groupFor(name) {
@@ -169,7 +196,7 @@ Panel {
   // empty Group while the panel displayed the empty body.
   readonly property var flatRows: {
     var out = []
-    if (root.degraded !== null || root.total === 0) return out
+    if (root.degraded !== null || root.publishedCount === 0) return out
     for (var i = 0; i < root.groupList.length; i++) {
       var g = root.groupList[i]
       out.push({ kind: "group", group: g.name, g: g })
@@ -207,7 +234,7 @@ Panel {
   // at something that is not on screen.
   readonly property var visibleSections: {
     var list = []
-    if (root.degraded !== null || root.total === 0) return list
+    if (root.degraded !== null || root.publishedCount === 0) return list
     for (var i = 0; i < root.groupList.length; i++) list.push("group:" + root.groupList[i].name)
     return list
   }
@@ -482,7 +509,10 @@ Panel {
 
   function startGroup(name) {
     if (!root.tracker || root.trackerBusy) return
-    root.setIntentForList(root.connectionsForGroup(name), true)
+    // Intent only for startable members — disabled rows must not bounce (#26).
+    var targets = root.enabledConnections(root.connectionsForGroup(name))
+    if (targets.length === 0) return
+    root.setIntentForList(targets, true)
     root.tracker.start({ kind: "group", group: name })
   }
 
@@ -505,14 +535,17 @@ Panel {
   // not consult the current Health state: asking to start something already
   // running is harmless and idempotent at the CLI, and second-guessing it here
   // would make h/l silently do nothing on the row the operator is pointing at.
+  // Disabled is different: start is refused a priori (#26), not idempotent.
   function startConnection(conn) {
     if (!root.tracker || root.trackerBusy) return
+    if (!root.isConnEnabled(conn)) return
     root.setIntent(conn.id, true)
     root.tracker.start({ kind: "id", id: conn.id })
   }
 
   function stopConnection(conn) {
     if (!root.tracker || root.trackerBusy) return
+    if (!root.isConnEnabled(conn)) return
     root.setIntent(conn.id, false)
     root.tracker.stop({ kind: "id", id: conn.id })
   }
@@ -520,6 +553,7 @@ Panel {
   // UI decides the verb; Tracker deliberately has no toggle().
   function toggleConnection(conn) {
     if (!root.tracker || root.trackerBusy) return
+    if (!root.isConnEnabled(conn)) return
     var on = root.canStart(conn.state)
     root.setIntent(conn.id, on)
     if (on) root.tracker.start({ kind: "id", id: conn.id })
@@ -685,7 +719,7 @@ Panel {
 
         // ---------- Empty: no Connections configured ----------
         Column {
-          visible: root.degraded === null && root.total === 0
+          visible: root.degraded === null && root.publishedCount === 0
           width: parent.width
           spacing: Style.spacing.md
 
@@ -727,7 +761,7 @@ Panel {
         // ---------- Switchboard ----------
         ListView {
           id: rowList
-          visible: root.degraded === null && root.total > 0
+          visible: root.degraded === null && root.publishedCount > 0
           width: parent.width
           // Own height, capped, so the enclosing Column keeps a finite
           // implicitHeight for fittedContentHeight above.
@@ -922,6 +956,7 @@ Panel {
     // Not `state`: QQuickItem already has one (the state-machine name), and
     // shadowing it is both a qmllint property-override and a real footgun.
     readonly property string healthState: row.conn.state
+    readonly property bool connEnabled: row.conn.enabled !== false
 
     // What the row *renders*. The polled Health state, except while a start we
     // asked for is still outstanding — then the row renders `starting`, so the
@@ -942,6 +977,7 @@ Panel {
     // link glyph stays lit until a document confirms the proxy is really down —
     // "no link glyph" keeps meaning "nothing is established".
     readonly property string displayState: {
+      if (!row.connEnabled) return "disabled"
       if (row.conn.state === "running" || row.conn.state === "starting") return row.conn.state
       if (root.hasIntent(row.conn.id) && root.intentFor(row.conn.id)) return "starting"
       return row.conn.state
@@ -950,8 +986,8 @@ Panel {
 
     hasCursor: root.cursorActive && root.focusSection === row.section
       && root.selectedIndex === row.rowData.indexInGroup
-    // The one persistent fill in the panel: running == on.
-    current: row.healthState === "running"
+    // The one persistent fill in the panel: running == on. Disabled never fills.
+    current: row.connEnabled && row.healthState === "running"
     foreground: root.fg
     accent: Color.accent
     implicitHeight: Math.max(rowInfo.implicitHeight, toggle.implicitHeight, stateGlyph.height)
@@ -961,12 +997,13 @@ Panel {
       id: rowMouse
       anchors.fill: parent
       hoverEnabled: true
-      cursorShape: Qt.PointingHandCursor
+      cursorShape: row.connEnabled ? Qt.PointingHandCursor : Qt.ArrowCursor
       onContainsMouseChanged: if (containsMouse) root.setCursor(row.section, row.rowData.indexInGroup)
       // Guard the click rather than disabling the MouseArea: `enabled: false`
       // would kill hoverEnabled too, so the cursor would stop following the
-      // mouse for as long as any action was in flight.
-      onClicked: if (!root.trackerBusy) root.toggleConnection(row.conn)
+      // mouse for as long as any action was in flight. Disabled rows are not
+      // start targets (#26) — still hoverable for the cursor.
+      onClicked: if (!root.trackerBusy && row.connEnabled) root.toggleConnection(row.conn)
     }
 
     // Full error.detail lives here, not on the row (chrome.md §4).
@@ -1060,9 +1097,11 @@ Panel {
         // it (knob slides back). ToggleSwitch documents this as the intended
         // way to get an instant throw — see root.intents for why `busy` is the
         // wrong thing to key it on.
-        checked: root.hasIntent(row.conn.id)
-          ? root.intentFor(row.conn.id)
-          : (row.healthState === "running" || row.healthState === "starting")
+        checked: !row.connEnabled
+          ? false
+          : (root.hasIntent(row.conn.id)
+            ? root.intentFor(row.conn.id)
+            : (row.healthState === "running" || row.healthState === "starting"))
         // `busy`, not `interactive`. ToggleSwitch documents `interactive` as
         // "off when the surrounding row owns the click", and derives
         // `cursorRing` from it — so cursorRing false collapses _pad to 0 and
@@ -1072,12 +1111,13 @@ Panel {
         // every row in the panel shrink 12px the instant any action started.
         // `busy` swallows clicks with no geometry or visual change at all,
         // which is exactly what the component's own docs recommend.
-        busy: root.trackerBusy
+        // Disabled also uses busy so the switch stays full size and inert (#26).
+        busy: root.trackerBusy || !row.connEnabled
         hasCursor: row.hasCursor
         foreground: root.fg
         accent: Color.accent
         onHovered: function (on) { if (on) root.setCursor(row.section, row.rowData.indexInGroup) }
-        onToggled: root.toggleConnection(row.conn)
+        onToggled: if (row.connEnabled) root.toggleConnection(row.conn)
       }
     }
   }
