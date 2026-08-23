@@ -404,11 +404,17 @@ click", and `cursorRing` derives from it — see the geometry rule below.
 
 ### The three positive signals
 
-1. **Intent, held until a document answers.** The switch shows what was *asked for*;
-   the state glyph (§2) shows what is *true*. Every command records its intent —
-   `{ id: bool }`, set for one Connection, a Group's worth, or all of them — and
-   `checked` reads that intent when present, falling back to the polled state
-   otherwise.
+1. **Intent, held until a document answers.** While an intent is outstanding, the
+   switch *and* the state glyph (§2) both show what was **asked for**; both fall back
+   to the polled document the moment one lands. Every command records its intent —
+   `{ id: bool }`, set for one Connection, a Group's worth, or all of them — `checked`
+   reads it when present, and `displayState` projects a *start* intent onto the glyph
+   column (§2).
+
+   The split is not switch-versus-glyph, it is during-versus-after. The glyph is where
+   the **outcome** is legible, because it carries four states where the switch carries
+   two: a start that failed resolves to alert-circle and its error code, where the
+   knob can only fall back.
 
    **Do not key this to `busy`.** `busy` ends when the CLI process *exits*, but the
    fresh Status document does not arrive until `delayedRefresh` fires 500ms later. In
@@ -417,7 +423,8 @@ click", and `cursorRing` derives from it — see the geometry rule below.
 
    The first document to land while no action is in flight settles every intent,
    whatever it says. It either confirms (knob stays, glyph goes live) or contradicts
-   (knob slides back — the operator's signal that the start or stop did not take).
+   (knob slides back and the glyph resolves to `stopped` or `error` — the operator's
+   signal that the start or stop did not take).
    Settling unconditionally also self-heals: an action Tracker's version gate refused
    to run drops its intent on the next poll instead of leaving the knob stuck.
 
@@ -426,8 +433,10 @@ click", and `cursorRing` derives from it — see the geometry rule below.
 2. **Group spinner.** The acting Group's start button swaps to the spinner glyph and
    rotates. `busyKey` names the Group, not the verb, so there is nothing to attribute
    a separate spinner control to — and adding one would change the Row's extent.
-3. **`starting` state.** Once the poll lands, the Connection reports `starting` and
-   its glyph spins (§2) — the durable signal the other two bridge to.
+3. **`starting`, projected immediately.** The acting Connection's glyph spins from the
+   moment the intent is recorded, not once a poll confirms it: `start` blocks until the
+   port opens, so the CLI's own `starting` is nearly unobservable from a panel action —
+   see §2. This is the per-row signal; signal 2 is its Group-level counterpart.
 
 ### Geometry stability
 

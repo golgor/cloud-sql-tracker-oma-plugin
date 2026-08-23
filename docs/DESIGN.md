@@ -75,7 +75,9 @@ The list above predates the chrome pass. These six points supersede it:
   an action is a sub-second CLI round trip, so it reads as the whole panel flashing on
   every toggle. Feedback comes instead from the switch showing **intent** (it slides on
   click and holds until a Status document confirms or denies it), a spinner on the
-  acting Group, and the `starting` Health state once the poll lands. Detail:
+  acting Group, and the acting row rendering `starting` from the moment the intent is
+  recorded — not once a poll lands, because `start` blocks until the port opens, which
+  leaves the CLI's own `starting` nearly unobservable. Detail:
   [`chrome.md`](./chrome.md) §5.
 - **The cursor survives close/reopen.** Reopening re-activates it where it was left, so
   toggling the same Connection again costs one `Enter`. Session-scoped only: the

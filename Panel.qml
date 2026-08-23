@@ -367,12 +367,14 @@ Panel {
 
   // ---- Intent (chrome.md §5) ----------------------------------------------
   //
-  // What the operator asked for, held until a Status document answers. The
-  // switch shows intent; the state glyph shows truth. Keying the optimistic
-  // value to `busy` instead does not work: busy ends when the CLI process
-  // exits, but the fresh document does not arrive until delayedRefresh fires
-  // 500ms later, so the knob falls back to the stale state and bounces
-  // On -> Off -> On for a single click.
+  // What the operator asked for, held until a Status document answers. Both the
+  // switch and the state glyph read it while it is held (see ConnectionRow's
+  // displayState) — the split is during-versus-after, not switch-versus-glyph.
+  //
+  // Keying the optimistic value to `busy` instead does not work: busy ends when
+  // the CLI process exits, but the fresh document does not arrive until
+  // delayedRefresh fires 500ms later, so the knob falls back to the stale state
+  // and bounces On -> Off -> On for a single click.
   //
   // Reassigned wholesale rather than mutated, because mutating a var in place
   // does not re-evaluate bindings that read it.
