@@ -720,6 +720,7 @@ Panel {
 
           Text {
             width: parent.width
+            textFormat: Text.PlainText
             text: root.degraded ? root.degradedTitle(root.degraded.kind) : ""
             color: Color.urgent
             font.family: root.fontFamily
@@ -730,6 +731,7 @@ Panel {
 
           Text {
             width: parent.width
+            textFormat: Text.PlainText
             text: root.degraded ? root.degraded.message : ""
             color: Util.alpha(root.fg, 0.7)
             font.family: root.fontFamily
@@ -746,6 +748,7 @@ Panel {
 
           Text {
             width: parent.width
+            textFormat: Text.PlainText
             text: "No connections configured."
             color: root.fg
             font.family: root.fontFamily
@@ -755,6 +758,7 @@ Panel {
 
           Text {
             width: parent.width
+            textFormat: Text.PlainText
             text: "Add connections with the CLI's config file:"
             color: Util.alpha(root.fg, 0.7)
             font.family: root.fontFamily
@@ -767,6 +771,7 @@ Panel {
           // connections.json; it is CLI-owned (DESIGN.md, CONTEXT.md).
           TextEdit {
             width: parent.width
+            textFormat: TextEdit.PlainText
             text: "~/.config/cloud-sql-tracker/connections.json"
             readOnly: true
             selectByMouse: true
@@ -890,6 +895,7 @@ Panel {
         anchors.right: groupActions.left
         anchors.rightMargin: Style.spacing.controlGap
         anchors.verticalCenter: parent.verticalCenter
+        textFormat: Text.PlainText
         text: root.groupCounts(header.g)
         color: Util.alpha(root.fg, 0.5)
         font.family: root.fontFamily
@@ -1092,6 +1098,7 @@ Panel {
         // Display name, not id (DESIGN.md "Connection row detail").
         Text {
           width: parent.width
+          textFormat: Text.PlainText
           text: row.conn.name
           color: root.nameColor(row.displayState)
           font.family: root.fontFamily
@@ -1101,6 +1108,7 @@ Panel {
 
         Text {
           width: parent.width
+          textFormat: Text.PlainText
           text: root.statusLine(row.conn, row.displayState)
           color: root.statusColor(row.displayState)
           font.family: root.fontFamily

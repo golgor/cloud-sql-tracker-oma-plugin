@@ -346,6 +346,7 @@ Item {
     _versionExited = false
     _versionProcGeneration = root._settingsGeneration
     versionProc.command = [root.cliPath, "--version"]
+    versionTimeout.restart()
     versionProc.running = true
   }
 
@@ -359,6 +360,7 @@ Item {
     _statusExited = false
     root._statusLaunchEpoch = root._actionEpoch
     statusProc.command = [root.cliPath, "status", "--json"]
+    statusTimeout.restart()
     statusProc.running = true
   }
 
@@ -370,6 +372,7 @@ Item {
     _doctorExited = false
     _doctorProcGeneration = root._settingsGeneration
     doctorProc.command = [root.cliPath, "doctor", "--json"]
+    doctorTimeout.restart()
     doctorProc.running = true
   }
 
@@ -396,6 +399,7 @@ Item {
     root._pendingActionTarget = target
     _actionExited = false
     actionProc.command = [root.cliPath, verb].concat(args)
+    actionTimeout.restart()
     actionProc.running = true
   }
 
@@ -426,6 +430,15 @@ Item {
 
   function _missingCliMessage() {
     return "Could not run '" + root.cliPath + "'. Check the cliPath setting or your PATH."
+  }
+
+  // Safety helper to read StdioCollector output with a hard character cap
+  // (default 16 KB = 16,384 chars). Prevents memory growth from CLI output flooding.
+  function _safeText(collector, maxLen) {
+    if (!collector || typeof collector.text !== "string") return ""
+    var text = collector.text
+    var cap = (typeof maxLen === "number" && maxLen > 0) ? maxLen : 16384
+    return text.length > cap ? text.substring(0, cap) : text
   }
 
   // Prefer CLI stderr (often multi-line with a useful last line). Fall back to
@@ -484,7 +497,7 @@ Item {
       }
     }
     if (!report || typeof report !== "object") {
-      var err = String(doctorStderr.text || "").trim()
+      var err = String(root._safeText(doctorStderr, 2048) || "").trim()
       if (err.indexOf("error: ") === 0) err = err.slice(7)
       root._doctorOk = false
       root._doctorFailMessage = err !== ""
@@ -536,6 +549,90 @@ Item {
     onTriggered: root._checkStatus()
   }
 
+  // ---- Process execution timeouts ------------------------------------------
+
+  Timer {
+    id: versionTimeout
+    interval: 3000
+    repeat: false
+    onTriggered: {
+      if (versionProc.running) {
+        console.warn("Tracker: versionProc timed out after 3s, killing process")
+        versionProc.kill()
+        root._versionExited = true
+        root.loaded = true
+        root._doctorWanted = false
+        root._doctorPending = false
+        root._setDegraded("cli_missing", "'" + root.cliPath + " --version' timed out after 3s.")
+      }
+    }
+  }
+
+  Timer {
+    id: statusTimeout
+    interval: 3000
+    repeat: false
+    onTriggered: {
+      if (statusProc.running) {
+        console.warn("Tracker: statusProc timed out after 3s, killing process")
+        statusProc.kill()
+        root._statusExited = true
+        root.loaded = true
+        root._applyParsed({
+          ok: false,
+          degraded: {
+            kind: "status_failed",
+            message: "'status --json' timed out after 3s."
+          }
+        })
+      }
+    }
+  }
+
+  Timer {
+    id: doctorTimeout
+    interval: 5000
+    repeat: false
+    onTriggered: {
+      if (doctorProc.running) {
+        console.warn("Tracker: doctorProc timed out after 5s, killing process")
+        doctorProc.kill()
+        root._doctorExited = true
+        root._doctorPending = false
+        root._doctorOk = false
+        root._doctorFailMessage = "'doctor --json' timed out after 5s."
+        root._setDegraded("doctor_failed", root._doctorFailMessage)
+      }
+    }
+  }
+
+  Timer {
+    id: actionTimeout
+    interval: 15000
+    repeat: false
+    onTriggered: {
+      if (actionProc.running) {
+        console.warn("Tracker: actionProc timed out after 15s, killing process")
+        actionProc.kill()
+        root._actionExited = true
+        root.busyKey = ""
+        root._actionEpoch++
+        var verb = root._pendingActionVerb !== "" ? root._pendingActionVerb : "action"
+        var target = root._pendingActionTarget
+        var ids = root._idsForTarget(target)
+        var msg = "'" + root.cliPath + " " + verb + "' timed out after 15s."
+        if (ids.length > 0) {
+          root._setActionErrorsForIds(ids, {
+            message: msg,
+            verb: verb,
+            exitCode: -1
+          })
+        }
+        delayedRefresh.restart()
+      }
+    }
+  }
+
   // ---- Processes (docs/modules.md "Process layout") -------------------------
 
   Process {
@@ -545,6 +642,7 @@ Item {
     stdout: StdioCollector { id: versionStdout; waitForEnd: true }
     stderr: StdioCollector { id: versionStderr; waitForEnd: true }
     onExited: function (exitCode) {
+      versionTimeout.stop()
       root._versionExited = true
       if (root._versionProcGeneration !== root._settingsGeneration) {
         // Settings (cliPath/minCliVersion) changed while this probe was in
@@ -555,13 +653,13 @@ Item {
       }
       root.loaded = true
       if (exitCode !== 0) {
-        var err = String(versionStderr.text || "").trim()
+        var err = String(root._safeText(versionStderr, 2048) || "").trim()
         root._doctorWanted = false
         root._doctorPending = false
         root._setDegraded("cli_missing", err !== "" ? err : ("'" + root.cliPath + " --version' exited with code " + exitCode + "."))
         return
       }
-      var text = String(versionStdout.text || "").trim()
+      var text = String(root._safeText(versionStdout) || "").trim()
       if (!root._versionAtLeast(text, root.minCliVersion)) {
         root._doctorWanted = false
         root._doctorPending = false
@@ -580,6 +678,7 @@ Item {
       }
     }
     onRunningChanged: {
+      if (!running) versionTimeout.stop()
       if (!running && !root._versionExited) {
         root._versionExited = true
         if (root._versionProcGeneration !== root._settingsGeneration) return
@@ -598,9 +697,10 @@ Item {
     stdout: StdioCollector { id: statusStdout; waitForEnd: true }
     stderr: StdioCollector { id: statusStderr; waitForEnd: true }
     onExited: function (exitCode) {
+      statusTimeout.stop()
       root._statusExited = true
       if (exitCode !== 0) {
-        var err = String(statusStderr.text || "").trim()
+        var err = String(root._safeText(statusStderr, 2048) || "").trim()
         var msg = err !== "" ? err : ("status --json exited with code " + exitCode + ".")
         if (msg.indexOf("error: ") === 0) msg = msg.slice(7)
         // Config load failures (invalid JSON, unknown keys, …) exit 2 with a
@@ -615,9 +715,10 @@ Item {
         })
         return
       }
-      root._applyParsed(Model.parseStatusDocument(String(statusStdout.text || "")))
+      root._applyParsed(Model.parseStatusDocument(String(root._safeText(statusStdout) || "")))
     }
     onRunningChanged: {
+      if (!running) statusTimeout.stop()
       if (!running && !root._statusExited) {
         root._statusExited = true
         root.loaded = true
@@ -637,6 +738,7 @@ Item {
     stdout: StdioCollector { id: doctorStdout; waitForEnd: true }
     stderr: StdioCollector { id: doctorStderr; waitForEnd: true }
     onExited: function (exitCode) {
+      doctorTimeout.stop()
       root._doctorExited = true
       if (root._doctorProcGeneration !== root._settingsGeneration) {
         // Settings (cliPath) changed while doctor was in flight — drop result.
@@ -645,9 +747,10 @@ Item {
       }
       // Doctor exits 3 when ok is false but still prints JSON — parse stdout
       // first. Non-JSON / empty stdout uses stderr or exit code.
-      root._applyDoctorReport(String(doctorStdout.text || ""), exitCode)
+      root._applyDoctorReport(String(root._safeText(doctorStdout) || ""), exitCode)
     }
     onRunningChanged: {
+      if (!running) doctorTimeout.stop()
       if (!running && !root._doctorExited) {
         root._doctorExited = true
         root._doctorPending = false
@@ -668,6 +771,7 @@ Item {
     stdout: StdioCollector { id: actionStdout; waitForEnd: true }
     stderr: StdioCollector { id: actionStderr; waitForEnd: true }
     onExited: function (exitCode) {
+      actionTimeout.stop()
       root._actionExited = true
       root.busyKey = ""
       root._actionEpoch++
@@ -675,8 +779,8 @@ Item {
       var target = root._pendingActionTarget
       var ids = root._idsForTarget(target)
       if (exitCode !== 0) {
-        var out = String(actionStdout.text || "").trim()
-        var err = String(actionStderr.text || "").trim()
+        var out = String(root._safeText(actionStdout, 2048) || "").trim()
+        var err = String(root._safeText(actionStderr, 2048) || "").trim()
         var msg = root._formatActionFailure(verb, exitCode, err, out)
         console.warn("Tracker: action exited with code " + exitCode + ":", msg)
         if (ids.length > 0) {
@@ -692,6 +796,7 @@ Item {
       delayedRefresh.restart()
     }
     onRunningChanged: {
+      if (!running) actionTimeout.stop()
       if (!running && !root._actionExited) {
         root._actionExited = true
         root.busyKey = ""
