@@ -125,17 +125,20 @@ Not the same as Connection Health `error`. When `Tracker.degraded !== null`, rep
 | `cli_old` | Upgrade CLI / adjust `minCliVersion` |
 | `schema` | Status document `version` ≠ 1 — upgrade plugin or CLI together |
 | `status_failed` | Status command failed — message/stderr hint (includes **invalid config JSON** / config load errors: CLI exits 2 on `status --json`) |
+| `doctor_failed` | `doctor --json` hard-fail (`ok: false`) — setup untrustworthy (e.g. missing `proxy_bin`). Full body; **no connection list** |
 
 When not degraded but **no Connections are published** in the Status document: empty copy — configure Connections via CLI-owned `connections.json` (path as text only; **do not** open or parse the file in-plugin). (UI progress counts are enabled-only; emptiness uses published row count so an all-disabled config still lists rows.)
 
-**Action failures are not Degraded.** A healthy Status with a failed start (e.g. unresolved `proxy_bin`) keeps the switchboard and shows a dismissible banner from `Tracker.lastActionError` (issue #27). Intent still settles so the knob does not stick On.
+**Doctor-on-open.** Opening the panel runs `cloud-sql-tracker doctor --json` once (not a continuous poll). Hard fail → `doctor_failed` Degraded. Status poll stays 5s closed / 2s open.
+
+**Action failures are not Degraded.** After doctor has passed, a failed start/stop is **row-scoped** (`Tracker.actionErrors[id]`): error glyph/status line + hover detail. No panel-wide banner. Intent still settles so the knob does not stick On. (Issue #31.)
 
 ### Explicit non-goals (v1 chrome)
 
 - Two-pane **Expanded view** (prototype **C**) — deferred product option, not v1
 - Dense chips (prototype **B**) — not chosen
 - Multi-tab shell (Status | Help | …) — deferred UI improvement; no config-file tab
-- In-panel `restart` / `doctor` / `logs`
+- In-panel `restart` / interactive `doctor` tab / `logs` (doctor **preflight on open** is in scope — full-body Degraded only)
 - Editing or viewing file contents of `connections.json`
 
 ### Prototype scenario controls (Happy / CLI missing / Empty)

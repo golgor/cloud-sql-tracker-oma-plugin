@@ -55,7 +55,7 @@ The CLI is the **control plane**. The plugin is a **client** of that CLI.
 | `manifest.json` | Plugin id, bar-widget entry, settings (`cliPath`, intervals, `minCliVersion`) |
 | `BarWidget.qml` | Host widget: button, `Tracker` child, `Loader` → Panel |
 | `Panel.qml` | Grouped list chrome: cursor, intent, disabled rows, group actions |
-| `Tracker.qml` | Poll, version gate, degraded, one action Process at a time |
+| `Tracker.qml` | Poll, version gate, doctor-on-open, degraded, one action Process at a time |
 | `Model.js` | `parseStatusDocument` — Status → plain objects |
 | `scripts/dev-link` | Symlink this checkout into Omarchy’s plugin dir |
 | `scripts/check-model.js` | Node smoke tests for Model.js + fixtures |
@@ -101,9 +101,11 @@ Field catalog lives in the CLI repo: `docs/status-document.v1.md`.
 - Per **Connection**: health glyph, name, `state · address:port` (or
   `disabled · …`), toggle.
 - **Degraded** replaces the whole switchboard (CLI missing/old, bad schema,
-  status failed — including invalid `connections.json`).
-- **Action failure banner** (not Degraded): failed start/stop keeps the list and
-  shows the CLI message (e.g. bad `proxy_bin`). Dismiss or succeed to clear.
+  status failed — including invalid `connections.json` — and **doctor hard-fail**
+  on panel open, e.g. missing `proxy_bin`).
+- **Row action errors** (not Degraded): after setup is OK, a failed start/stop
+  paints that Connection as error with hover detail (`actionErrors`). No global
+  banner.
 - Keyboard: `j`/`k`, `Enter`, `h`/`l`, `Esc`, `Tab` — see README and `chrome.md`.
 
 ### Intent and busy
@@ -115,6 +117,7 @@ Field catalog lives in the CLI repo: `docs/status-document.v1.md`.
 - Intent clears when a Status document with newer provenance arrives after the
   action (or refusal). Detail: `chrome.md` §5 and `modules.md` “Document
   provenance”.
+- Panel open also runs **doctor once**. Continuous poll is still status only.
 
 ## Install paths
 

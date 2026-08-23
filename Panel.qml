@@ -54,8 +54,8 @@ Panel {
   readonly property string busyKey: tracker ? tracker.busyKey : ""
   readonly property int actionEpoch: tracker ? tracker.actionEpoch : 0
   readonly property int documentEpoch: tracker ? tracker.documentEpoch : -1
-  // Last failed start/stop message from Tracker (issue #27). null when clear.
-  readonly property var lastActionError: tracker ? tracker.lastActionError : null
+  // Per-id start/stop failures from Tracker (issue #31). Empty object when none.
+  readonly property var actionErrors: tracker ? tracker.actionErrors : ({})
 
   readonly property color fg: root.bar ? root.bar.foreground : Color.foreground
   readonly property string fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
@@ -136,18 +136,31 @@ Panel {
     // start targets (issue #26). Prefer this label over a projected start.
     if (conn.enabled === false)
       return "disabled  ·  " + where
-    if (state === "error")
-      return (conn.error && conn.error.code ? conn.error.code : "error") + "  ·  " + where
+    if (state === "error") {
+      // Prefer Status error code; action overlay has no code — use "error".
+      var code = (conn.error && conn.error.code) ? conn.error.code : "error"
+      return code + "  ·  " + where
+    }
     return root.stateLabel(state) + "  ·  " + where
   }
 
-  // Detail only, never the code: the code is already in the status line two
-  // pixels away, and the row's PanelToolTip is gated on this being non-empty —
-  // so an empty detail correctly means no tooltip at all (chrome.md §4).
-  // Model.js normalises a missing detail to "", so this is always a string.
+  // Detail for the row tooltip. Prefer Status error.detail when present;
+  // otherwise the plugin action-error overlay message (pre-launch start
+  // fails leave Status as stopped — issue #31).
   function errorDetail(conn) {
-    if (conn.state !== "error" || !conn.error) return ""
-    return conn.error.detail
+    if (conn.state === "error" && conn.error && conn.error.detail)
+      return conn.error.detail
+    var overlay = root.actionErrorFor(conn.id)
+    if (overlay && overlay.message) return String(overlay.message)
+    if (conn.state === "error" && conn.error) return conn.error.detail || ""
+    return ""
+  }
+
+  function actionErrorFor(id) {
+    if (!id || !root.actionErrors) return null
+    return Object.prototype.hasOwnProperty.call(root.actionErrors, id)
+      ? root.actionErrors[id]
+      : null
   }
 
   // ---- Derived lists ------------------------------------------------------
@@ -406,7 +419,12 @@ Panel {
   onOpenedChanged: {
     if (opened) {
       root.restoreCursor()
-      if (root.tracker) root.tracker.refresh()
+      if (root.tracker) {
+        root.tracker.refresh()
+        // One-shot setup preflight — not on the status poll timer (#31).
+        if (typeof root.tracker.runDoctor === "function")
+          root.tracker.runDoctor()
+      }
     }
   }
 
@@ -475,11 +493,6 @@ Panel {
     if (Object.keys(root.intents).length === 0) return
     if (root.documentEpoch <= root.intentEpoch) return
     root.intents = ({})
-  }
-
-  function dismissActionError() {
-    if (root.tracker && typeof root.tracker.clearActionError === "function")
-      root.tracker.clearActionError()
   }
 
   // ---- Busy (chrome.md §5) ------------------------------------------------
@@ -577,15 +590,10 @@ Panel {
     if (kind === "cli_old") return "cloud-sql-tracker is too old"
     if (kind === "schema") return "Status document not understood"
     if (kind === "status_failed") return "Status check failed"
+    if (kind === "doctor_failed") return "Setup check failed"
     // Required fallback: degraded.kind is a Tracker value, and a future kind
     // must not render a blank body.
     return "cloud-sql-tracker unavailable"
-  }
-
-  // Hero / banner line for lastActionError. Prefer the CLI's own wording.
-  function actionErrorText(err) {
-    if (!err) return ""
-    return err.message ? String(err.message) : "Action failed."
   }
 
   KeyboardPanel {
@@ -702,40 +710,6 @@ Panel {
 
         PanelSeparator {
           foreground: root.fg
-        }
-
-        // ---------- Action failure (issue #27) ----------------------------
-        // Status can still be healthy (e.g. bad proxy_bin: status ok, start
-        // exits 3). Do not replace the switchboard — show a dismissible
-        // banner above the list so the knob bounce is explained.
-        Column {
-          visible: root.degraded === null && root.lastActionError !== null
-          width: parent.width
-          spacing: Style.spacing.sm
-
-          Row {
-            width: parent.width
-            spacing: Style.spacing.md
-
-            Text {
-              width: parent.width - dismissErr.implicitWidth - Style.spacing.md
-              text: root.actionErrorText(root.lastActionError)
-              color: Color.urgent
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
-              wrapMode: Text.WordWrap
-            }
-
-            PanelActionButton {
-              id: dismissErr
-              iconText: "󰅖" // U+F0156 close
-              tooltipText: "Dismiss"
-              foreground: root.fg
-              fontFamily: root.fontFamily
-              enabled: true
-              onClicked: root.dismissActionError()
-            }
-          }
         }
 
         // ---------- Degraded: replaces the switchboard entirely ----------
@@ -1004,6 +978,7 @@ Panel {
     // shadowing it is both a qmllint property-override and a real footgun.
     readonly property string healthState: row.conn.state
     readonly property bool connEnabled: row.conn.enabled !== false
+    readonly property var actionErr: root.actionErrorFor(row.conn.id)
 
     // What the row *renders*. The polled Health state, except while a start we
     // asked for is still outstanding — then the row renders `starting`, so the
@@ -1017,8 +992,9 @@ Panel {
     //
     // Truth still wins, it just lands second. The first document to arrive with
     // no action in flight drops the intent (settleIntents), so a start that
-    // took resolves to `running` and one that failed resolves to `error`. The
-    // resting pair is never knob-on + link-off.
+    // took resolves to `running` and one that failed resolves to `error` (or
+    // the actionErrors overlay when Status stayed stopped — issue #31).
+    // The resting pair is never knob-on + link-off.
     //
     // Only an intent to *start* projects. A stop keeps the polled state, so the
     // link glyph stays lit until a document confirms the proxy is really down —
@@ -1027,6 +1003,7 @@ Panel {
       if (!row.connEnabled) return "disabled"
       if (row.conn.state === "running" || row.conn.state === "starting") return row.conn.state
       if (root.hasIntent(row.conn.id) && root.intentFor(row.conn.id)) return "starting"
+      if (row.actionErr) return "error"
       return row.conn.state
     }
     readonly property string detail: root.errorDetail(row.conn)

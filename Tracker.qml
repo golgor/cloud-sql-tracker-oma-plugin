@@ -3,10 +3,11 @@ import Quickshell.Io
 import "Model.js" as Model
 
 // Deep module: polls the cloud-sql-tracker CLI, gates on minimum version,
-// and runs start/stop. BarWidget and Panel bind to the view props below and
-// call refresh() / start() / stop() — they never touch Process, argv, or
-// Model.js directly. Contract: docs/modules.md, docs/DESIGN.md,
-// CONTEXT.md ("Tracker", "Degraded", "Action target").
+// runs doctor-on-open preflight, and runs start/stop. BarWidget and Panel
+// bind to the view props below and call refresh() / runDoctor() / start() /
+// stop() — they never touch Process, argv, or Model.js directly. Contract:
+// docs/modules.md, docs/DESIGN.md, CONTEXT.md ("Tracker", "Degraded",
+// "Action target"). Issue #31: doctor_failed + row-scoped actionErrors.
 Item {
   id: root
 
@@ -33,6 +34,9 @@ Item {
   onSettingsChanged: {
     _versionOk = false
     _settingsGeneration++
+    // Next panel open should re-run doctor against the new cliPath.
+    root._doctorOk = null
+    root._doctorFailMessage = ""
   }
 
   // ---- View out (docs/modules.md "Tracker interface") ----------------------
@@ -49,9 +53,10 @@ Item {
   property var connections: []
 
   // null when usable; otherwise { kind, message }. kind is one of
-  // "cli_missing" | "cli_old" | "schema" | "status_failed" (CONTEXT.md
-  // "Degraded"). Config load failures from the CLI (exit 2 on status)
-  // land here as status_failed with the CLI stderr message.
+  // "cli_missing" | "cli_old" | "schema" | "status_failed" | "doctor_failed".
+  // Config load failures from the CLI (exit 2 on status) land as status_failed.
+  // Doctor hard-fail (ok === false) lands as doctor_failed and hides the
+  // switchboard even when Status is healthy (issue #31).
   property var degraded: null
 
   // Action in flight. busyKey is opaque to callers beyond string identity;
@@ -59,15 +64,22 @@ Item {
   readonly property bool busy: actionProc.running
   property string busyKey: ""
 
-  // Last failed start/stop the panel should show. null when the last action
-  // succeeded or none has run. Shape: { verb, message, exitCode }.
-  // Not Degraded: Status may still be healthy (e.g. bad proxy_bin — status
-  // works, start exits 3). Cleared on the next successful action, or via
-  // clearActionError(). Issue #27 / dogfood #18.
-  property var lastActionError: null
+  // Per-connection start/stop failures the panel paints on the row (not a
+  // global banner). Map id → { message, verb, exitCode }. Cleared for the
+  // action's target scope on the next successful action. Issue #31.
+  property var actionErrors: ({})
 
-  function clearActionError() {
-    root.lastActionError = null
+  function clearActionError(id) {
+    if (id === undefined || id === null || id === "") {
+      root.actionErrors = ({})
+      return
+    }
+    if (!Object.prototype.hasOwnProperty.call(root.actionErrors, id)) return
+    var next = {}
+    for (var k in root.actionErrors) {
+      if (k !== id) next[k] = root.actionErrors[k]
+    }
+    root.actionErrors = next
   }
 
   // Document provenance. `busy` covers actionProc only, so it cannot answer the
@@ -98,6 +110,12 @@ Item {
   // degraded".
   property bool loaded: false
 
+  // Doctor preflight: null = not run this settings generation; true/false
+  // after runDoctor(). Hard fail wins over a healthy Status for the panel
+  // (full-body Degraded, no connection list).
+  property var _doctorOk: null
+  property string _doctorFailMessage: ""
+
   // ---- Commands (docs/modules.md "Commands") --------------------------------
 
   // Run a status poll now (and the version gate first, when it has not
@@ -109,6 +127,19 @@ Item {
       return
     }
     _checkStatus()
+  }
+
+  // One-shot setup preflight. Panel calls this on open in addition to
+  // refresh(). Not on the status poll timer. Requires version gate pass.
+  function runDoctor() {
+    if (!_versionOk) {
+      // Version probe in flight or failed — doctor cannot run yet. Panel will
+      // call again on the next open after the gate passes.
+      if (!_versionOk && !versionProc.running)
+        _checkVersion()
+      return
+    }
+    _checkDoctor()
   }
 
   // target: { kind: "id" | "group" | "all", id?, group? } — see
@@ -196,12 +227,23 @@ Item {
     }
     root._hasGoodDocument = true
     root._documentEpoch = root._statusLaunchEpoch
-    root._clearDegraded()
     root.runningCount = parsed.running
     root.errorCount = parsed.error
     root.total = parsed.total
     root.groups = parsed.groups
     root.connections = parsed.connections
+    // Healthy Status must not wipe a doctor hard-fail: setup is still
+    // untrustworthy, so the switchboard stays hidden (issue #31).
+    if (root._doctorOk === false) {
+      root._setDegraded(
+        "doctor_failed",
+        root._doctorFailMessage !== ""
+          ? root._doctorFailMessage
+          : "cloud-sql-tracker doctor reported a failed check."
+      )
+      return
+    }
+    root._clearDegraded()
   }
 
   // ---- Internal: action targets ---------------------------------------------
@@ -219,6 +261,47 @@ Item {
     if (target.kind === "id") return "id:" + target.id
     if (target.kind === "group") return "group:" + target.group
     return "all"
+  }
+
+  // Connection ids in scope for a target (for actionErrors attribution).
+  function _idsForTarget(target) {
+    var ids = []
+    if (!target) return ids
+    if (target.kind === "id" && target.id) {
+      ids.push(String(target.id))
+      return ids
+    }
+    var list = root.connections || []
+    for (var i = 0; i < list.length; i++) {
+      var c = list[i]
+      if (!c || !c.id) continue
+      if (target.kind === "all")
+        ids.push(String(c.id))
+      else if (target.kind === "group" && c.group === target.group)
+        ids.push(String(c.id))
+    }
+    return ids
+  }
+
+  function _setActionErrorsForIds(ids, entry) {
+    var next = {}
+    for (var k in root.actionErrors) next[k] = root.actionErrors[k]
+    for (var i = 0; i < ids.length; i++)
+      next[ids[i]] = entry
+    root.actionErrors = next
+  }
+
+  function _clearActionErrorsForIds(ids) {
+    if (!ids || ids.length === 0) return
+    var drop = {}
+    for (var i = 0; i < ids.length; i++) drop[ids[i]] = true
+    var next = {}
+    var changed = false
+    for (var k in root.actionErrors) {
+      if (drop[k]) { changed = true; continue }
+      next[k] = root.actionErrors[k]
+    }
+    if (changed) root.actionErrors = next
   }
 
   // ---- Internal: process launch ----------------------------------------------
@@ -244,42 +327,42 @@ Item {
     statusProc.running = true
   }
 
+  function _checkDoctor() {
+    if (doctorProc.running) return
+    _doctorExited = false
+    doctorProc.command = [root.cliPath, "doctor", "--json"]
+    doctorProc.running = true
+  }
+
   function _runAction(verb, target) {
     if (actionProc.running) return
     if (!root._versionOk) {
       var gateMsg = "Cannot " + verb + " — version gate has not passed" +
         (root.degraded ? (" (" + root.degraded.kind + ").") : ".")
       console.warn("Tracker: " + gateMsg)
-      root.lastActionError = { verb: verb, message: gateMsg, exitCode: -1 }
-      // Refused, but settled: advance the epoch so a consumer holding
-      // optimistic state for this action drops it on the next document instead
-      // of waiting on an action that will never run.
+      // No connection scope without a validated CLI — nothing to pin on a row.
       root._actionEpoch++
       return
     }
     var args = _targetArgs(target)
     if (args === null) {
       console.warn("Tracker: invalid action target for " + verb + ":", JSON.stringify(target))
-      root.lastActionError = {
-        verb: verb,
-        message: "Invalid action target for " + verb + ".",
-        exitCode: -1
-      }
       root._actionEpoch++
       return
     }
-    // Clear a previous banner only when a new action is actually launched —
-    // a refused action above keeps (or replaces) the error for the operator.
-    root.lastActionError = null
+    // Drop prior row errors for this scope when a new action is launched.
+    root._clearActionErrorsForIds(root._idsForTarget(target))
     root.busyKey = _targetKey(target)
     root._pendingActionVerb = verb
+    root._pendingActionTarget = target
     _actionExited = false
     actionProc.command = [root.cliPath, verb].concat(args)
     actionProc.running = true
   }
 
-  // Verb of the in-flight or just-finished action (for lastActionError).
+  // Verb / target of the in-flight or just-finished action (for actionErrors).
   property string _pendingActionVerb: ""
+  property var _pendingActionTarget: null
 
   // Guards distinguishing "the process exited normally" (onExited fired)
   // from "the process never started" (Quickshell only emits runningChanged
@@ -288,6 +371,7 @@ Item {
   property bool _versionExited: true
   property bool _statusExited: true
   property bool _actionExited: true
+  property bool _doctorExited: true
 
   // Bumped by onSettingsChanged. _versionProcGeneration captures the value
   // at the moment a versionProc launch is kicked off, so its exit handlers
@@ -304,7 +388,7 @@ Item {
 
   // Prefer CLI stderr (often multi-line with a useful last line). Fall back to
   // stdout summary, then a generic exit-code line. Strip a leading "error: "
-  // so the panel banner is not "error: error: …".
+  // so the row tooltip is not "error: error: …".
   function _formatActionFailure(verb, exitCode, err, out) {
     var raw = err !== "" ? err : out
     var line = ""
@@ -319,6 +403,62 @@ Item {
     if (line === "")
       line = "'" + root.cliPath + " " + verb + "' exited with code " + exitCode + "."
     return line
+  }
+
+  // Summarize doctor --json hard failures for Degraded copy.
+  function _doctorFailureMessage(report) {
+    if (!report || typeof report !== "object")
+      return "cloud-sql-tracker doctor failed."
+    var checks = Array.isArray(report.checks) ? report.checks : []
+    var failed = []
+    for (var i = 0; i < checks.length; i++) {
+      var c = checks[i]
+      if (!c || c.status !== "fail") continue
+      failed.push(c)
+    }
+    if (failed.length === 0)
+      return "cloud-sql-tracker doctor reported a failed setup check."
+    var first = failed[0]
+    var id = first.id ? String(first.id) : "check"
+    var detail = first.detail ? String(first.detail).trim() : ""
+    var hint = first.hint ? String(first.hint).trim() : ""
+    var msg = id + (detail !== "" ? (": " + detail) : " failed")
+    if (hint !== "") msg = msg + " — " + hint
+    if (failed.length > 1)
+      msg = msg + " (+" + (failed.length - 1) + " more)"
+    return msg
+  }
+
+  function _applyDoctorReport(text, exitCode) {
+    var raw = String(text || "").trim()
+    var report = null
+    if (raw !== "") {
+      try {
+        report = JSON.parse(raw)
+      } catch (e) {
+        report = null
+      }
+    }
+    if (!report || typeof report !== "object") {
+      var err = String(doctorStderr.text || "").trim()
+      if (err.indexOf("error: ") === 0) err = err.slice(7)
+      root._doctorOk = false
+      root._doctorFailMessage = err !== ""
+        ? err
+        : ("doctor --json exited with code " + exitCode + ".")
+      root._setDegraded("doctor_failed", root._doctorFailMessage)
+      return
+    }
+    if (report.ok === true) {
+      root._doctorOk = true
+      root._doctorFailMessage = ""
+      if (root.degraded !== null && root.degraded.kind === "doctor_failed")
+        root._clearDegraded()
+      return
+    }
+    root._doctorOk = false
+    root._doctorFailMessage = root._doctorFailureMessage(report)
+    root._setDegraded("doctor_failed", root._doctorFailMessage)
   }
 
   // ---- Timers ---------------------------------------------------------------
@@ -383,6 +523,9 @@ Item {
       root._versionOk = true
       // Do not wait for the next poll tick to see the first Status document.
       root._checkStatus()
+      // Panel open may have requested doctor before the gate passed.
+      if (root.panelOpen)
+        root._checkDoctor()
     }
     onRunningChanged: {
       if (!running && !root._versionExited) {
@@ -434,6 +577,28 @@ Item {
   }
 
   Process {
+    id: doctorProc
+    running: false
+    command: []
+    stdout: StdioCollector { id: doctorStdout; waitForEnd: true }
+    stderr: StdioCollector { id: doctorStderr; waitForEnd: true }
+    onExited: function (exitCode) {
+      root._doctorExited = true
+      // Doctor exits 3 when ok is false but still prints JSON — parse stdout
+      // first. Non-JSON / empty stdout uses stderr or exit code.
+      root._applyDoctorReport(String(doctorStdout.text || ""), exitCode)
+    }
+    onRunningChanged: {
+      if (!running && !root._doctorExited) {
+        root._doctorExited = true
+        root._doctorOk = false
+        root._doctorFailMessage = root._missingCliMessage()
+        root._setDegraded("doctor_failed", root._doctorFailMessage)
+      }
+    }
+  }
+
+  Process {
     id: actionProc
     running: false
     command: []
@@ -444,14 +609,22 @@ Item {
       root.busyKey = ""
       root._actionEpoch++
       var verb = root._pendingActionVerb !== "" ? root._pendingActionVerb : "action"
+      var target = root._pendingActionTarget
+      var ids = root._idsForTarget(target)
       if (exitCode !== 0) {
         var out = String(actionStdout.text || "").trim()
         var err = String(actionStderr.text || "").trim()
         var msg = root._formatActionFailure(verb, exitCode, err, out)
         console.warn("Tracker: action exited with code " + exitCode + ":", msg)
-        root.lastActionError = { verb: verb, message: msg, exitCode: exitCode }
+        if (ids.length > 0) {
+          root._setActionErrorsForIds(ids, {
+            message: msg,
+            verb: verb,
+            exitCode: exitCode
+          })
+        }
       } else {
-        root.lastActionError = null
+        root._clearActionErrorsForIds(ids)
       }
       delayedRefresh.restart()
     }
@@ -461,9 +634,17 @@ Item {
         root.busyKey = ""
         root._actionEpoch++
         var verb = root._pendingActionVerb !== "" ? root._pendingActionVerb : "action"
+        var target = root._pendingActionTarget
+        var ids = root._idsForTarget(target)
         var msg = root._missingCliMessage()
         console.warn("Tracker: " + msg)
-        root.lastActionError = { verb: verb, message: msg, exitCode: -1 }
+        if (ids.length > 0) {
+          root._setActionErrorsForIds(ids, {
+            message: msg,
+            verb: verb,
+            exitCode: -1
+          })
+        }
         delayedRefresh.restart()
       }
     }
