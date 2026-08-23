@@ -80,12 +80,21 @@ Callers (Bar, Panel, later tests against a fake) learn only this surface.
 | `connections` | Connection rows for the panel |
 | `degraded` | `null` when usable; else `{ kind, message }` |
 | `busy` / `busyKey` | Action in flight (optional key for row spinners) |
+| `lastActionError` | `null` or `{ verb, message, exitCode }` after a failed/refused start or stop. Cleared on the next successful action or `clearActionError()`. Not Degraded — Status may still be healthy (issue #27). |
 | `actionEpoch` / `documentEpoch` | Document provenance — see below |
 | `loaded` | At least one status or version attempt finished |
 
 **`degraded.kind` (v1):** `cli_missing` | `cli_old` | `schema` | `status_failed`
 
 When `degraded !== null`, UI must not present a healthy empty switchboard as success.
+
+**Config vs action failures**
+
+| Situation | CLI | Tracker |
+|-----------|-----|---------|
+| Invalid / unloadable `connections.json` | `status --json` exit **2**, stderr message | `degraded.kind === "status_failed"`, message from stderr |
+| Bad `proxy_bin` (valid config) | `status` ok (`stopped`); `start` exit **3** | Switchboard stays up; `lastActionError` carries the dependency message |
+| Single-id start refused (disabled, …) | exit **2** | `lastActionError` (and no sticky start intent once settled) |
 
 #### Document provenance
 
@@ -114,6 +123,7 @@ silently losing it left callers on pre-action truth until the next tick.
 | `refresh()` | Run status poll now (and version gate when needed) |
 | `start(target)` | `cloud-sql-tracker start …` then refresh |
 | `stop(target)` | `cloud-sql-tracker stop …` then refresh |
+| `clearActionError()` | Drop `lastActionError` (panel dismiss) |
 
 **Action target:** `{ kind: "id" | "group" | "all", id?: string, group?: string }`  
 Tracker maps that to argv. UI does **not** build argv strings.

@@ -54,6 +54,8 @@ Panel {
   readonly property string busyKey: tracker ? tracker.busyKey : ""
   readonly property int actionEpoch: tracker ? tracker.actionEpoch : 0
   readonly property int documentEpoch: tracker ? tracker.documentEpoch : -1
+  // Last failed start/stop message from Tracker (issue #27). null when clear.
+  readonly property var lastActionError: tracker ? tracker.lastActionError : null
 
   readonly property color fg: root.bar ? root.bar.foreground : Color.foreground
   readonly property string fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
@@ -475,6 +477,11 @@ Panel {
     root.intents = ({})
   }
 
+  function dismissActionError() {
+    if (root.tracker && typeof root.tracker.clearActionError === "function")
+      root.tracker.clearActionError()
+  }
+
   // ---- Busy (chrome.md §5) ------------------------------------------------
   //
   // Tracker runs one action at a time: _runAction returns early and silently
@@ -573,6 +580,12 @@ Panel {
     // Required fallback: degraded.kind is a Tracker value, and a future kind
     // must not render a blank body.
     return "cloud-sql-tracker unavailable"
+  }
+
+  // Hero / banner line for lastActionError. Prefer the CLI's own wording.
+  function actionErrorText(err) {
+    if (!err) return ""
+    return err.message ? String(err.message) : "Action failed."
   }
 
   KeyboardPanel {
@@ -689,6 +702,40 @@ Panel {
 
         PanelSeparator {
           foreground: root.fg
+        }
+
+        // ---------- Action failure (issue #27) ----------------------------
+        // Status can still be healthy (e.g. bad proxy_bin: status ok, start
+        // exits 3). Do not replace the switchboard — show a dismissible
+        // banner above the list so the knob bounce is explained.
+        Column {
+          visible: root.degraded === null && root.lastActionError !== null
+          width: parent.width
+          spacing: Style.spacing.sm
+
+          Row {
+            width: parent.width
+            spacing: Style.spacing.md
+
+            Text {
+              width: parent.width - dismissErr.implicitWidth - Style.spacing.md
+              text: root.actionErrorText(root.lastActionError)
+              color: Color.urgent
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              wrapMode: Text.WordWrap
+            }
+
+            PanelActionButton {
+              id: dismissErr
+              iconText: "󰅖" // U+F0156 close
+              tooltipText: "Dismiss"
+              foreground: root.fg
+              fontFamily: root.fontFamily
+              enabled: true
+              onClicked: root.dismissActionError()
+            }
+          }
         }
 
         // ---------- Degraded: replaces the switchboard entirely ----------

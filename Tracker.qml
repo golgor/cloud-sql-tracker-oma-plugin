@@ -50,13 +50,25 @@ Item {
 
   // null when usable; otherwise { kind, message }. kind is one of
   // "cli_missing" | "cli_old" | "schema" | "status_failed" (CONTEXT.md
-  // "Degraded").
+  // "Degraded"). Config load failures from the CLI (exit 2 on status)
+  // land here as status_failed with the CLI stderr message.
   property var degraded: null
 
   // Action in flight. busyKey is opaque to callers beyond string identity;
   // see _targetKey() for its shape.
   readonly property bool busy: actionProc.running
   property string busyKey: ""
+
+  // Last failed start/stop the panel should show. null when the last action
+  // succeeded or none has run. Shape: { verb, message, exitCode }.
+  // Not Degraded: Status may still be healthy (e.g. bad proxy_bin — status
+  // works, start exits 3). Cleared on the next successful action, or via
+  // clearActionError(). Issue #27 / dogfood #18.
+  property var lastActionError: null
+
+  function clearActionError() {
+    root.lastActionError = null
+  }
 
   // Document provenance. `busy` covers actionProc only, so it cannot answer the
   // question a UI holding optimistic state actually has: *was this document
@@ -235,8 +247,10 @@ Item {
   function _runAction(verb, target) {
     if (actionProc.running) return
     if (!root._versionOk) {
-      console.warn("Tracker: ignoring " + verb + " — version gate has not passed (degraded: " +
-        (root.degraded ? root.degraded.kind : "not yet checked") + ").")
+      var gateMsg = "Cannot " + verb + " — version gate has not passed" +
+        (root.degraded ? (" (" + root.degraded.kind + ").") : ".")
+      console.warn("Tracker: " + gateMsg)
+      root.lastActionError = { verb: verb, message: gateMsg, exitCode: -1 }
       // Refused, but settled: advance the epoch so a consumer holding
       // optimistic state for this action drops it on the next document instead
       // of waiting on an action that will never run.
@@ -246,14 +260,26 @@ Item {
     var args = _targetArgs(target)
     if (args === null) {
       console.warn("Tracker: invalid action target for " + verb + ":", JSON.stringify(target))
+      root.lastActionError = {
+        verb: verb,
+        message: "Invalid action target for " + verb + ".",
+        exitCode: -1
+      }
       root._actionEpoch++
       return
     }
+    // Clear a previous banner only when a new action is actually launched —
+    // a refused action above keeps (or replaces) the error for the operator.
+    root.lastActionError = null
     root.busyKey = _targetKey(target)
+    root._pendingActionVerb = verb
     _actionExited = false
     actionProc.command = [root.cliPath, verb].concat(args)
     actionProc.running = true
   }
+
+  // Verb of the in-flight or just-finished action (for lastActionError).
+  property string _pendingActionVerb: ""
 
   // Guards distinguishing "the process exited normally" (onExited fired)
   // from "the process never started" (Quickshell only emits runningChanged
@@ -274,6 +300,25 @@ Item {
 
   function _missingCliMessage() {
     return "Could not run '" + root.cliPath + "'. Check the cliPath setting or your PATH."
+  }
+
+  // Prefer CLI stderr (often multi-line with a useful last line). Fall back to
+  // stdout summary, then a generic exit-code line. Strip a leading "error: "
+  // so the panel banner is not "error: error: …".
+  function _formatActionFailure(verb, exitCode, err, out) {
+    var raw = err !== "" ? err : out
+    var line = ""
+    if (raw !== "") {
+      var parts = raw.split("\n")
+      for (var i = parts.length - 1; i >= 0; i--) {
+        var t = String(parts[i] || "").trim()
+        if (t !== "") { line = t; break }
+      }
+      if (line.indexOf("error: ") === 0) line = line.slice(7)
+    }
+    if (line === "")
+      line = "'" + root.cliPath + " " + verb + "' exited with code " + exitCode + "."
+    return line
   }
 
   // ---- Timers ---------------------------------------------------------------
@@ -359,11 +404,16 @@ Item {
       root._statusExited = true
       if (exitCode !== 0) {
         var err = String(statusStderr.text || "").trim()
+        var msg = err !== "" ? err : ("status --json exited with code " + exitCode + ".")
+        if (msg.indexOf("error: ") === 0) msg = msg.slice(7)
+        // Config load failures (invalid JSON, unknown keys, …) exit 2 with a
+        // clear stderr line — still status_failed, not a separate kind, so
+        // older panels keep working. The message is the operator signal.
         root._applyParsed({
           ok: false,
           degraded: {
             kind: "status_failed",
-            message: err !== "" ? err : ("status --json exited with code " + exitCode + ".")
+            message: msg
           }
         })
         return
@@ -393,11 +443,15 @@ Item {
       root._actionExited = true
       root.busyKey = ""
       root._actionEpoch++
+      var verb = root._pendingActionVerb !== "" ? root._pendingActionVerb : "action"
       if (exitCode !== 0) {
         var out = String(actionStdout.text || "").trim()
         var err = String(actionStderr.text || "").trim()
-        console.warn("Tracker: action exited with code " + exitCode + ":",
-          err !== "" ? err : (out !== "" ? out : "(no output)"))
+        var msg = root._formatActionFailure(verb, exitCode, err, out)
+        console.warn("Tracker: action exited with code " + exitCode + ":", msg)
+        root.lastActionError = { verb: verb, message: msg, exitCode: exitCode }
+      } else {
+        root.lastActionError = null
       }
       delayedRefresh.restart()
     }
@@ -406,7 +460,10 @@ Item {
         root._actionExited = true
         root.busyKey = ""
         root._actionEpoch++
-        console.warn("Tracker: " + root._missingCliMessage())
+        var verb = root._pendingActionVerb !== "" ? root._pendingActionVerb : "action"
+        var msg = root._missingCliMessage()
+        console.warn("Tracker: " + msg)
+        root.lastActionError = { verb: verb, message: msg, exitCode: -1 }
         delayedRefresh.restart()
       }
     }
