@@ -19,7 +19,7 @@ Deep-module layout for implement tickets. Chrome (how it looks) is separate — 
 
 **Why:** One deep interface keeps CLI I/O local; nested scaffold already matches weather/clock and this repo; host-level service is overkill and uncertain for third-party plugins.
 
-**Discarded:** Combined `barWidget` → single Panel entry (churn, no extra depth); fat Panel/Bar with inline Process; two *external* modules (Cli + Model) that every caller must compose; `execDetached` for start/stop.
+**Discarded:** Combined `barWidget` → single Panel entry (churn, no extra depth); fat Panel/Bar with inline Process; two *external* modules (Cli + Model) that every caller must compose; `execDetached` for start/stop; continuous doctor poll.
 
 **Unchanged:** CLI-only contract (`--version`, `status --json`, `start`/`stop`, and `doctor --json` as **panel-open preflight only** — not on the status poll timer); no reads of `connections.json`; manifest settings keys.
 

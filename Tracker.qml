@@ -472,6 +472,8 @@ Item {
   }
 
   function _applyDoctorReport(text, exitCode) {
+    root._doctorPending = false
+    root._doctorWanted = false
     var raw = String(text || "").trim()
     var report = null
     if (raw !== "") {
@@ -481,7 +483,6 @@ Item {
         report = null
       }
     }
-    root._doctorPending = false
     if (!report || typeof report !== "object") {
       var err = String(doctorStderr.text || "").trim()
       if (err.indexOf("error: ") === 0) err = err.slice(7)
@@ -571,13 +572,11 @@ Item {
       // Do not wait for the next poll tick to see the first Status document.
       root._checkStatus()
       // Doctor requested on panel open often races the version probe: runDoctor
-      // no-ops while !_versionOk. Start it now if the panel is still open or
-      // a gated runDoctor set _doctorWanted — do not wait for a second open.
-      if (root.panelOpen || root._doctorWanted) {
+      // sets _doctorWanted / _doctorPending while !_versionOk. Start doctor now
+      // if the panel is open or a gated request is still pending.
+      if (root.panelOpen || root._doctorWanted || root._doctorPending) {
         root._doctorWanted = false
         root._checkDoctor()
-      } else {
-        root._doctorPending = false
       }
     }
     onRunningChanged: {
@@ -652,6 +651,7 @@ Item {
       if (!running && !root._doctorExited) {
         root._doctorExited = true
         root._doctorPending = false
+        root._doctorWanted = false
         if (root._doctorProcGeneration !== root._settingsGeneration)
           return
         root._doctorOk = false

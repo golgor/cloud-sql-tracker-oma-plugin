@@ -129,7 +129,7 @@ Not the same as Connection Health `error`. When `Tracker.degraded !== null`, rep
 
 When not degraded but **no Connections are published** in the Status document: empty copy — configure Connections via CLI-owned `connections.json` (path as text only; **do not** open or parse the file in-plugin). (UI progress counts are enabled-only; emptiness uses published row count so an all-disabled config still lists rows.)
 
-**Doctor-on-open.** Opening the panel runs `cloud-sql-tracker doctor --json` once (not a continuous poll). Hard fail → `doctor_failed` Degraded. Status poll stays 5s closed / 2s open.
+**Doctor-on-open.** Opening the panel runs `cloud-sql-tracker doctor --json` once (not a continuous poll). From request until doctor settles, the switchboard stays hidden (`doctor_failed` with "Checking setup…"), so a faster Status poll cannot flash the connection list. Hard fail keeps full-body Degraded; pass reveals the list. Status poll stays 5s closed / 2s open.
 
 **Action failures are not Degraded.** After doctor has passed, a failed start/stop is **row-scoped** (`Tracker.actionErrors[id]`): error glyph/status line + hover detail. No panel-wide banner. Intent still settles so the knob does not stick On. (Issue #31.)
 
