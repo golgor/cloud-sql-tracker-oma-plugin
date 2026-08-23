@@ -169,10 +169,13 @@ Golden fixture: sibling CLI `examples/status.v1.json` (copy or path in tests lat
     cloud-sql-tracker CLI
 ```
 
-## Implement checklist (for later tickets)
+## Implement checklist
 
-- [ ] Add `Tracker.qml` + `Model.js`; keep Bar/Panel free of Process
-- [ ] Wire `tracker` through `injectPanel`; bar binds counts/degraded
-- [ ] Panel lists `groups` / `connections`; start/stop via Action target
-- [ ] Degraded empty-states for each `degraded.kind`
-- [ ] Optional later: Node/fixture tests calling `Model.js` only
+- [x] Add `Tracker.qml` + `Model.js`; keep Bar/Panel free of Process
+- [x] Wire `tracker` through `injectPanel`; bar binds counts/degraded
+- [x] Panel lists `groups` / `connections`; start/stop via Action target
+- [x] Degraded empty-states for each `degraded.kind`
+- [x] Node/fixture smoke: `scripts/check-model.js`
+- [ ] Optional later: broader automated UI tests (not required for v1 dogfood)
+
+Cold-start narrative: [`how-it-works.md`](./how-it-works.md). Agent workflow: [`../AGENTS.md`](../AGENTS.md).
