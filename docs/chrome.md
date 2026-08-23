@@ -366,10 +366,14 @@ Fields shown are exactly `name`, `state`, `address`, `port`, `error.code`
 | `checked` | the row's **intent** while one is held, else `state === "running" \|\| state === "starting"` — see §5 |
 | `busy` | `tracker.busy` — panel-wide, not `busyKey`-scoped: Tracker runs one action at a time, so every switch is equally unclickable while any is in flight |
 | `interactive` | **never bound.** It drives `cursorRing`, and so the control's implicit size — see the geometry rule below |
-| `onToggled` | `canStart(state) ? tracker.start(...) : tracker.stop(...)` |
+| `onToggled` | `root.toggleConnection(conn)` — **never `tracker.start`/`stop` directly.** The command function is what busy-guards the click, records the intent, *then* calls Tracker; calling Tracker from the switch skips the intent and so loses both the optimistic knob and the projected `starting` (§2) |
 
 `canStart(state)` is `state === "stopped" || state === "error"`. The **UI** picks the
 verb; `Tracker` deliberately has no `toggle()` (`docs/modules.md`).
+
+Every mouse and keyboard verb goes through the Panel's command functions (§5) — they
+are the single place the busy guard and the intent write live, so no control reaches
+`Tracker` on its own.
 
 ---
 
