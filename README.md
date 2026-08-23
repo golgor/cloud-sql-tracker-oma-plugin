@@ -36,6 +36,27 @@ Validate a local checkout:
 omarchy plugin validate ~/Code/Personal/cloud-sql-tracker-oma-plugin
 ```
 
+## Keyboard
+
+The panel is fully drivable without a mouse once open: `j`/`k` walk rows across
+group boundaries, `Enter` toggles whatever the cursor is on, `h`/`l` are the
+explicit stop/start verbs for a connection or a whole group, `Esc` closes, and
+`Tab` switches to the neighbouring bar panel.
+
+To summon it with a hotkey, add a binding to `~/.config/hypr/bindings.lua`:
+
+```lua
+o.bind("SUPER + CTRL + Q", "Cloud SQL Tracker",
+  "omarchy-shell shell toggle io.github.golgor.cloud-sql-tracker")
+```
+
+If that combination is already taken, `hl.unbind("SUPER + CTRL + Q")` on the line
+before releases it first — check with `omarchy menu keybindings --print`.
+
+Omarchy's built-in `SUPER + CTRL + <n>` also toggles the nth panel in the bar's
+right section, which may already reach this one; a named binding is preferred
+because the numbered form is positional and follows bar order.
+
 ## Local development
 
 For working on this plugin itself, symlink this checkout into Omarchy's plugin
@@ -47,8 +68,18 @@ directory instead of using `omarchy plugin add` (which clones a copy):
 
 This symlinks `~/.config/omarchy/plugins/io.github.golgor.cloud-sql-tracker`
 to this checkout, runs `omarchy plugin validate`, rescans plugins, and
-enables the widget (default bar section: `right`). Saved edits under this
-checkout hot-reload — no re-copy needed. Safe to re-run.
+enables the widget (default bar section: `right`). Safe to re-run.
+
+**Saved edits do not hot-reload.** The shell watches its own config path, not a
+symlinked plugin directory, so QML changes under this checkout are picked up only
+after:
+
+```bash
+omarchy restart shell
+```
+
+The symlink still saves you re-cloning on every change — it is the copy step that
+goes away, not the reload step.
 
 ```bash
 ./scripts/dev-link --help              # options

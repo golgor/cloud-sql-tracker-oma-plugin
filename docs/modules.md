@@ -27,11 +27,27 @@ Deep-module layout for implement tickets. Chrome (how it looks) is separate — 
 
 ```
 BarWidget.qml   thin: button, open/close/toggle, injectPanel, bind count / degraded
-Panel.qml       thin: render groups and rows; call start/stop
+Panel.qml       stateful chrome Adapter: render, cursor, intent, displayState;
+                calls Tracker only
 Tracker.qml     deep module (child of BarWidget)
 Model.js        pure parse/map (used by Tracker; not by UI)
 manifest.json   kinds: ["bar-widget"]; entryPoints.barWidget = BarWidget.qml
 ```
+
+**Panel is thin in the dimension that matters and not in the one it does not.**
+It holds no CLI knowledge — no `Process`, no argv, no `Model.js` import, no reads
+of `connections.json` — and that is the seam this document exists to protect. It
+does hold real UI state: the flat row model, the shared mouse/keyboard cursor and
+its repair, the optimistic intent map, and the `displayState` projection. The
+original "thin: render groups and rows" wording predates all four and would send
+a future change looking for a layer that was never removed.
+
+Those clusters are pure functions over their inputs, so they could move to an
+internal UI-state module and become testable outside Quickshell — the deletion
+test says they would be genuinely missed, unlike the visual mapping helpers. That
+is a **follow-up**, not a debt to pay here, and it would be a second *internal*
+seam, never a second external one. `Model.js` is not the destination: its
+interface is Status parsing only.
 
 ### Wiring
 
@@ -64,11 +80,32 @@ Callers (Bar, Panel, later tests against a fake) learn only this surface.
 | `connections` | Connection rows for the panel |
 | `degraded` | `null` when usable; else `{ kind, message }` |
 | `busy` / `busyKey` | Action in flight (optional key for row spinners) |
+| `actionEpoch` / `documentEpoch` | Document provenance — see below |
 | `loaded` | At least one status or version attempt finished |
 
 **`degraded.kind` (v1):** `cli_missing` | `cli_old` | `schema` | `status_failed`
 
 When `degraded !== null`, UI must not present a healthy empty switchboard as success.
+
+#### Document provenance
+
+`busy` answers *"is an action running?"*. A UI holding optimistic state needs a
+different question — *"was this document observed after my action finished?"* — and
+`busy` cannot answer it, because it covers `actionProc` alone. A status poll started
+before an action can exit after it, carrying pre-action truth.
+
+| Prop | Meaning |
+|------|---------|
+| `actionEpoch` | Count of actions whose outcome is settled. Advanced when an action exits, **and when one is refused**, so optimistic state held for an action that never ran is still released. |
+| `documentEpoch` | The `actionEpoch` current when the poll producing the last applied document was *launched*. Only a successful Status document advances it — a failed poll says nothing about the world. |
+
+**Rule for callers.** Capture `actionEpoch` when you act; treat a document as
+authoritative for that action only once `documentEpoch` exceeds the captured value.
+`Panel` does exactly this with its intent map.
+
+Tracker also **retries** a poll it could not start because one was in flight, rather
+than dropping it. `start`/`stop` schedule the only guaranteed post-action read, and
+silently losing it left callers on pre-action truth until the next tick.
 
 ### Commands
 
