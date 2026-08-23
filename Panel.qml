@@ -123,9 +123,13 @@ Panel {
     return root.stateLabel(conn.state) + "  ·  " + where
   }
 
+  // Detail only, never the code: the code is already in the status line two
+  // pixels away, and the row's PanelToolTip is gated on this being non-empty —
+  // so an empty detail correctly means no tooltip at all (chrome.md §4).
+  // Model.js normalises a missing detail to "", so this is always a string.
   function errorDetail(conn) {
     if (conn.state !== "error" || !conn.error) return ""
-    return conn.error.detail !== "" ? conn.error.detail : conn.error.code
+    return conn.error.detail
   }
 
   // ---- Derived lists ------------------------------------------------------
