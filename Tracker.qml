@@ -248,6 +248,8 @@ Item {
     root.total = parsed.total
     root.groups = parsed.groups
     root.connections = parsed.connections
+    // Drop row overlays once Status shows the Connection is live again.
+    root._clearActionErrorsForHealthyConnections(parsed.connections)
     // Healthy Status must not wipe doctor hard-fail *or* in-flight preflight.
     if (root._doctorOk === false) {
       root._setDegraded(
@@ -323,6 +325,20 @@ Item {
     if (changed) root.actionErrors = next
   }
 
+  // Status truth wins: a running/starting row must not keep a stale start-fail
+  // tooltip from a previous action (seams review PR #32).
+  function _clearActionErrorsForHealthyConnections(connections) {
+    if (!connections || connections.length === 0) return
+    var ids = []
+    for (var i = 0; i < connections.length; i++) {
+      var c = connections[i]
+      if (!c || !c.id) continue
+      if (c.state === "running" || c.state === "starting")
+        ids.push(String(c.id))
+    }
+    root._clearActionErrorsForIds(ids)
+  }
+
   // ---- Internal: process launch ----------------------------------------------
 
   function _checkVersion() {
@@ -352,6 +368,7 @@ Item {
     if (root.degraded === null || root.degraded.kind === "doctor_failed")
       root._setDegraded("doctor_failed", "Checking setup...")
     _doctorExited = false
+    _doctorProcGeneration = root._settingsGeneration
     doctorProc.command = [root.cliPath, "doctor", "--json"]
     doctorProc.running = true
   }
@@ -403,6 +420,9 @@ Item {
   // process's result.
   property int _settingsGeneration: 0
   property int _versionProcGeneration: -1
+  // Same generation stamp as versionProc: a doctor launched against an old
+  // cliPath must not apply after settings change (PR #32 seams).
+  property int _doctorProcGeneration: -1
 
   function _missingCliMessage() {
     return "Could not run '" + root.cliPath + "'. Check the cliPath setting or your PATH."
@@ -619,6 +639,11 @@ Item {
     stderr: StdioCollector { id: doctorStderr; waitForEnd: true }
     onExited: function (exitCode) {
       root._doctorExited = true
+      if (root._doctorProcGeneration !== root._settingsGeneration) {
+        // Settings (cliPath) changed while doctor was in flight — drop result.
+        root._doctorPending = false
+        return
+      }
       // Doctor exits 3 when ok is false but still prints JSON — parse stdout
       // first. Non-JSON / empty stdout uses stderr or exit code.
       root._applyDoctorReport(String(doctorStdout.text || ""), exitCode)
@@ -627,6 +652,8 @@ Item {
       if (!running && !root._doctorExited) {
         root._doctorExited = true
         root._doctorPending = false
+        if (root._doctorProcGeneration !== root._settingsGeneration)
+          return
         root._doctorOk = false
         root._doctorFailMessage = root._missingCliMessage()
         root._setDegraded("doctor_failed", root._doctorFailMessage)
