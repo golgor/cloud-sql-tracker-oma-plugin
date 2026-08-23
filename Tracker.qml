@@ -37,6 +37,7 @@ Item {
     // Next panel open should re-run doctor against the new cliPath.
     root._doctorOk = null
     root._doctorFailMessage = ""
+    root._doctorWanted = false
   }
 
   // ---- View out (docs/modules.md "Tracker interface") ----------------------
@@ -115,6 +116,10 @@ Item {
   // (full-body Degraded, no connection list).
   property var _doctorOk: null
   property string _doctorFailMessage: ""
+  // Set when runDoctor() is asked while the version gate is not yet ok, so
+  // the version success path can start doctor even if panelOpen binding lags
+  // (first-open race — issue #31 review).
+  property bool _doctorWanted: false
 
   // ---- Commands (docs/modules.md "Commands") --------------------------------
 
@@ -133,12 +138,15 @@ Item {
   // refresh(). Not on the status poll timer. Requires version gate pass.
   function runDoctor() {
     if (!_versionOk) {
-      // Version probe in flight or failed — doctor cannot run yet. Panel will
-      // call again on the next open after the gate passes.
-      if (!_versionOk && !versionProc.running)
+      // Version probe in flight or not started — remember the request and
+      // ensure a probe is running. versionProc onExited starts doctor when
+      // the gate passes (panelOpen or _doctorWanted).
+      root._doctorWanted = true
+      if (!versionProc.running)
         _checkVersion()
       return
     }
+    root._doctorWanted = false
     _checkDoctor()
   }
 
@@ -523,15 +531,20 @@ Item {
       root._versionOk = true
       // Do not wait for the next poll tick to see the first Status document.
       root._checkStatus()
-      // Panel open may have requested doctor before the gate passed.
-      if (root.panelOpen)
+      // Doctor requested on panel open often races the version probe: runDoctor
+      // no-ops while !_versionOk. Start it now if the panel is still open or
+      // a gated runDoctor set _doctorWanted — do not wait for a second open.
+      if (root.panelOpen || root._doctorWanted) {
+        root._doctorWanted = false
         root._checkDoctor()
+      }
     }
     onRunningChanged: {
       if (!running && !root._versionExited) {
         root._versionExited = true
         if (root._versionProcGeneration !== root._settingsGeneration) return
         root.loaded = true
+        root._doctorWanted = false
         root._setDegraded("cli_missing", root._missingCliMessage())
       }
     }
