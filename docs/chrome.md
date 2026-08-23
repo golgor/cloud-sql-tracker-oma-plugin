@@ -327,9 +327,9 @@ Fields shown are exactly `name`, `state`, `address`, `port`, `error.code`
 
 | Property | Value |
 |----------|-------|
-| `checked` | `state === "running" \|\| state === "starting"` |
-| `busy` | `tracker.busy && tracker.busyKey === "id:" + id` |
-| `interactive` | `!tracker.busy` — see §5 |
+| `checked` | the row's **intent** while one is held, else `state === "running" \|\| state === "starting"` — see §5 |
+| `busy` | `tracker.busy` — panel-wide, not `busyKey`-scoped: Tracker runs one action at a time, so every switch is equally unclickable while any is in flight |
+| `interactive` | **never bound.** It drives `cursorRing`, and so the control's implicit size — see the geometry rule below |
 | `onToggled` | `canStart(state) ? tracker.start(...) : tracker.stop(...)` |
 
 `canStart(state)` is `state === "stopped" || state === "error"`. The **UI** picks the

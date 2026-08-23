@@ -982,9 +982,9 @@ Panel {
         }
       }
 
-      // busy holds the knob mid-flight; interactive disables every control
-      // while any action is in flight, because Tracker ignores concurrent
-      // actions silently (chrome.md §5).
+      // Intent holds the knob mid-flight and `busy` swallows further clicks.
+      // Deliberately no `interactive` binding — see the note on it below, and
+      // chrome.md §5.
       ToggleSwitch {
         id: toggle
         anchors.right: parent.right
