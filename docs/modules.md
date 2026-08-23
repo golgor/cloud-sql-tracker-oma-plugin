@@ -11,7 +11,7 @@ Deep-module layout for implement tickets. Chrome (how it looks) is separate — 
 | Choice | Value |
 |--------|--------|
 | Host shape | **Nested** scaffold: `BarWidget.qml` loads `Panel.qml` (`Loader { active: true }`). |
-| Deep module | **Tracker** (`Tracker.qml`) — poll, version gate, start/stop, last Status view. |
+| Deep module | **Tracker** (`Tracker.qml`) — poll, version gate, **doctor-on-open**, start/stop, last Status view. |
 | Pure internal seam | **`Model.js`** — parse/validate Status JSON only. |
 | UI | Bar and Panel **bind and call** Tracker only. No `Process` in UI files. |
 | Shell `kind: "service"` | **No** for v1. |
@@ -21,7 +21,7 @@ Deep-module layout for implement tickets. Chrome (how it looks) is separate — 
 
 **Discarded:** Combined `barWidget` → single Panel entry (churn, no extra depth); fat Panel/Bar with inline Process; two *external* modules (Cli + Model) that every caller must compose; `execDetached` for start/stop.
 
-**Unchanged:** CLI-only contract (`--version`, `status --json`, `start`/`stop`); no reads of `connections.json`; manifest settings keys.
+**Unchanged:** CLI-only contract (`--version`, `status --json`, `start`/`stop`, and `doctor --json` as **panel-open preflight only** — not on the status poll timer); no reads of `connections.json`; manifest settings keys.
 
 ## Files
 

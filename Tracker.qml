@@ -38,6 +38,7 @@ Item {
     root._doctorOk = null
     root._doctorFailMessage = ""
     root._doctorWanted = false
+    root._doctorPending = false
   }
 
   // ---- View out (docs/modules.md "Tracker interface") ----------------------
@@ -120,6 +121,9 @@ Item {
   // the version success path can start doctor even if panelOpen binding lags
   // (first-open race — issue #31 review).
   property bool _doctorWanted: false
+  // True from doctor request until _applyDoctorReport settles. Healthy Status
+  // must not clear Degraded or show the switchboard while this is true.
+  property bool _doctorPending: false
 
   // ---- Commands (docs/modules.md "Commands") --------------------------------
 
@@ -137,6 +141,10 @@ Item {
   // One-shot setup preflight. Panel calls this on open in addition to
   // refresh(). Not on the status poll timer. Requires version gate pass.
   function runDoctor() {
+    // Hide the switchboard until doctor settles (even before Process starts).
+    root._doctorPending = true
+    if (root.degraded === null || root.degraded.kind === "doctor_failed")
+      root._setDegraded("doctor_failed", "Checking setup...")
     if (!_versionOk) {
       // Version probe in flight or not started — remember the request and
       // ensure a probe is running. versionProc onExited starts doctor when
@@ -240,8 +248,7 @@ Item {
     root.total = parsed.total
     root.groups = parsed.groups
     root.connections = parsed.connections
-    // Healthy Status must not wipe a doctor hard-fail: setup is still
-    // untrustworthy, so the switchboard stays hidden (issue #31).
+    // Healthy Status must not wipe doctor hard-fail *or* in-flight preflight.
     if (root._doctorOk === false) {
       root._setDegraded(
         "doctor_failed",
@@ -249,6 +256,10 @@ Item {
           ? root._doctorFailMessage
           : "cloud-sql-tracker doctor reported a failed check."
       )
+      return
+    }
+    if (root._doctorPending) {
+      root._setDegraded("doctor_failed", "Checking setup...")
       return
     }
     root._clearDegraded()
@@ -337,6 +348,9 @@ Item {
 
   function _checkDoctor() {
     if (doctorProc.running) return
+    root._doctorPending = true
+    if (root.degraded === null || root.degraded.kind === "doctor_failed")
+      root._setDegraded("doctor_failed", "Checking setup...")
     _doctorExited = false
     doctorProc.command = [root.cliPath, "doctor", "--json"]
     doctorProc.running = true
@@ -447,6 +461,7 @@ Item {
         report = null
       }
     }
+    root._doctorPending = false
     if (!report || typeof report !== "object") {
       var err = String(doctorStderr.text || "").trim()
       if (err.indexOf("error: ") === 0) err = err.slice(7)
@@ -520,11 +535,15 @@ Item {
       root.loaded = true
       if (exitCode !== 0) {
         var err = String(versionStderr.text || "").trim()
+        root._doctorWanted = false
+        root._doctorPending = false
         root._setDegraded("cli_missing", err !== "" ? err : ("'" + root.cliPath + " --version' exited with code " + exitCode + "."))
         return
       }
       var text = String(versionStdout.text || "").trim()
       if (!root._versionAtLeast(text, root.minCliVersion)) {
+        root._doctorWanted = false
+        root._doctorPending = false
         root._setDegraded("cli_old", "cloud-sql-tracker " + (text !== "" ? text : "(unknown)") + " is older than the required " + root.minCliVersion + ".")
         return
       }
@@ -537,6 +556,8 @@ Item {
       if (root.panelOpen || root._doctorWanted) {
         root._doctorWanted = false
         root._checkDoctor()
+      } else {
+        root._doctorPending = false
       }
     }
     onRunningChanged: {
@@ -545,6 +566,7 @@ Item {
         if (root._versionProcGeneration !== root._settingsGeneration) return
         root.loaded = true
         root._doctorWanted = false
+        root._doctorPending = false
         root._setDegraded("cli_missing", root._missingCliMessage())
       }
     }
@@ -604,6 +626,7 @@ Item {
     onRunningChanged: {
       if (!running && !root._doctorExited) {
         root._doctorExited = true
+        root._doctorPending = false
         root._doctorOk = false
         root._doctorFailMessage = root._missingCliMessage()
         root._setDegraded("doctor_failed", root._doctorFailMessage)
