@@ -144,7 +144,7 @@ Item {
     // Hide the switchboard until doctor settles (even before Process starts).
     root._doctorPending = true
     if (root.degraded === null || root.degraded.kind === "doctor_failed")
-      root._setDegraded("doctor_failed", "Checking setup...")
+      root._setDegraded("doctor_failed", "Checking setup…")
     if (!_versionOk) {
       // Version probe in flight or not started — remember the request and
       // ensure a probe is running. versionProc onExited starts doctor when
@@ -260,8 +260,8 @@ Item {
       )
       return
     }
-    if (root._doctorPending) {
-      root._setDegraded("doctor_failed", "Checking setup...")
+    if (root._doctorPending || root._doctorWanted) {
+      root._setDegraded("doctor_failed", "Checking setup…")
       return
     }
     root._clearDegraded()
@@ -366,7 +366,7 @@ Item {
     if (doctorProc.running) return
     root._doctorPending = true
     if (root.degraded === null || root.degraded.kind === "doctor_failed")
-      root._setDegraded("doctor_failed", "Checking setup...")
+      root._setDegraded("doctor_failed", "Checking setup…")
     _doctorExited = false
     _doctorProcGeneration = root._settingsGeneration
     doctorProc.command = [root.cliPath, "doctor", "--json"]
