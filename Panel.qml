@@ -407,7 +407,13 @@ Panel {
       return
     }
     var sections = root.visibleSections
-    if (sections.length === 0) { root.resetCursor(); return }
+    if (sections.length === 0) {
+      // Do not wipe remembered cursor while doctor preflight is pending (#37).
+      if (root.degraded !== null && root.degraded.kind === "doctor_failed" && root.tracker && root.tracker._doctorPending)
+        return
+      root.resetCursor()
+      return
+    }
     if (sections.indexOf(root.focusSection) < 0) { root.setCursor(sections[0], -1); return }
     var max = root.sectionCount(root.focusSection) - 1
     if (root.selectedIndex > max) root.selectedIndex = max
