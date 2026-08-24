@@ -892,6 +892,7 @@ Panel {
         anchors.left: parent.left
         anchors.verticalCenter: parent.verticalCenter
         text: header.g.name.toUpperCase()
+        textFormat: Text.PlainText
         foreground: root.fg
         fontFamily: root.fontFamily
       }
@@ -1044,9 +1045,27 @@ Panel {
 
     // Full error.detail lives here, not on the row (chrome.md §4).
     PanelToolTip {
+      id: rowTooltip
       visible: row.detail !== "" && rowMouse.containsMouse
       text: row.detail
       fontFamily: root.fontFamily
+
+      // PanelToolTip's own contentItem defaults to Text.AutoText (issue #43):
+      // error.detail is CLI-derived, so an AutoText sink here lets a crafted
+      // detail (e.g. an <img src> tag) make this long-lived shell process
+      // fetch a remote URL. Override with an otherwise-identical Text that
+      // forces PlainText; palette, font, and padding mirror the component.
+      contentItem: Text {
+        text: rowTooltip.text
+        textFormat: Text.PlainText
+        color: rowTooltip.panelForeground
+        font.family: rowTooltip.fontFamily
+        font.pixelSize: rowTooltip.fontSize
+        leftPadding: Border.left(rowTooltip.panelBorderSpec) + Style.spacing.controlPaddingX
+        rightPadding: Border.right(rowTooltip.panelBorderSpec) + Style.spacing.controlPaddingX
+        topPadding: Border.top(rowTooltip.panelBorderSpec) + Style.spacing.controlPaddingY
+        bottomPadding: Border.bottom(rowTooltip.panelBorderSpec) + Style.spacing.controlPaddingY
+      }
     }
 
     Item {

@@ -220,8 +220,18 @@ Item {
   // shows zero/empty (never had anything to show).
   property bool _hasGoodDocument: false
 
+  // BarWidget's tooltip (Bar.qml's tooltipLabel) is a shell-owned Text with
+  // no reachable textFormat property, and it defaults to AutoText — so a raw
+  // "<" in degraded.message could open a tag there (issue #43). "<" is the
+  // only character AutoText markup needs to start, so replacing it closes
+  // the outbound-fetch risk. Not "&lt;": the plain-text Panel sinks that
+  // also read degraded.message would show the entities literally.
+  function _noRawAngleBracket(text) {
+    return String(text || "").replace(/</g, "\u2039")
+  }
+
   function _setDegraded(kind, message) {
-    root.degraded = { kind: kind, message: message }
+    root.degraded = { kind: kind, message: root._noRawAngleBracket(message) }
     if (!root._hasGoodDocument) {
       root.runningCount = 0
       root.errorCount = 0
