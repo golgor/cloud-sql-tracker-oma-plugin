@@ -51,14 +51,14 @@
         "type": "string",
         "label": "CLI path",
         "defaultValue": "cloud-sql-tracker",
-        "description": "Binary name or absolute path. Must be on PATH if not absolute."
+        "description": "Binary name or absolute path. Must be on PATH if not absolute. A relative path (e.g. './tracker') is rejected."
       },
       {
         "key": "minCliVersion",
         "type": "string",
         "label": "Minimum CLI version",
         "defaultValue": "0.1.0",
-        "description": "Plugin refuses to drive an older cloud-sql-tracker (semver)."
+        "description": "Plugin refuses to drive an older cloud-sql-tracker. Exact major.minor.patch, e.g. 0.1.0. An invalid value falls back to this default and logs a warning."
       }
     ]
   }

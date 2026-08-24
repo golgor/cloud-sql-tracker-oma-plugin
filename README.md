@@ -23,7 +23,7 @@ Powered by the external [`cloud-sql-tracker`](https://github.com/golgor/cloud-sq
 ## Requirements
 
 - Omarchy with `omarchy plugin` support
-- [`cloud-sql-tracker`](https://github.com/golgor/cloud-sql-tracker) on your `PATH` (or set `cliPath` in plugin settings)
+- [`cloud-sql-tracker`](https://github.com/golgor/cloud-sql-tracker) on your `PATH` (or set `cliPath` in plugin settings — an absolute path or a bare command name; a relative path like `./tracker` is rejected)
 - Configured `~/.config/cloud-sql-tracker/connections.json` (see CLI repo examples)
 - `cloud-sql-proxy` + GCP ADC set up for the proxy itself
 
