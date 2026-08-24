@@ -416,11 +416,12 @@ Item {
   property bool _actionExited: true
   property bool _doctorExited: true
 
-  // Set by a timeout handler right before running = false, cleared at the
-  // top of the matching onExited. onExited still fires after running is
-  // set false — SIGTERM delivery is async, and Quickshell reports it as a
-  // normal exit (exitCode=15, CrashExit) — so without this flag the timeout
-  // handler's own cleanup above runs a second time on top of it.
+  // Set by a timeout handler right before signal(9) + running = false,
+  // cleared at the top of the matching onExited. onExited still fires after
+  // that — signal delivery is async, and Quickshell reports the result as a
+  // crash exit (exitCode=9, CrashExit), not a normal one — so without this
+  // flag, onExited's own failure-path cleanup would run again on top of the
+  // timeout handler's cleanup.
   property bool _versionTimedOut: false
   property bool _statusTimedOut: false
   property bool _actionTimedOut: false
@@ -568,13 +569,14 @@ Item {
     onTriggered: {
       if (versionProc.running) {
         console.warn("Tracker: versionProc timed out after 3s, terminating process")
-        // Order matters: flip the guards before running = false so
-        // onRunningChanged's "process never started" branch (fires
-        // synchronously below) sees this as already handled instead of
-        // overwriting this degraded message with the generic cli_missing one.
+        // runningChanged(false) arrives later, after exited — set _versionExited
+        // first so its "process never started" branch does not overwrite this
+        // timeout message with the generic cli_missing one.
         root._versionTimedOut = true
         root._versionExited = true
+        versionProc.signal(9)   // SIGTERM is trappable; a hung CLI must not outlive its timeout
         versionProc.running = false
+        if (root._versionProcGeneration !== root._settingsGeneration) return
         root.loaded = true
         root._doctorWanted = false
         root._doctorPending = false
@@ -592,6 +594,7 @@ Item {
         console.warn("Tracker: statusProc timed out after 3s, terminating process")
         root._statusTimedOut = true
         root._statusExited = true
+        statusProc.signal(9)   // SIGTERM is trappable; a hung CLI must not outlive its timeout
         statusProc.running = false
         root.loaded = true
         root._applyParsed({
@@ -614,8 +617,10 @@ Item {
         console.warn("Tracker: doctorProc timed out after 5s, terminating process")
         root._doctorTimedOut = true
         root._doctorExited = true
+        doctorProc.signal(9)   // SIGTERM is trappable; a hung CLI must not outlive its timeout
         doctorProc.running = false
         root._doctorPending = false
+        if (root._doctorProcGeneration !== root._settingsGeneration) return
         root._doctorOk = false
         root._doctorFailMessage = "'doctor --json' timed out after 5s."
         root._setDegraded("doctor_failed", root._doctorFailMessage)
@@ -632,6 +637,7 @@ Item {
         console.warn("Tracker: actionProc timed out after 15s, terminating process")
         root._actionTimedOut = true
         root._actionExited = true
+        actionProc.signal(9)   // SIGTERM is trappable; a hung CLI must not outlive its timeout
         actionProc.running = false
         root.busyKey = ""
         root._actionEpoch++
@@ -660,9 +666,7 @@ Item {
     stdout: StdioCollector { id: versionStdout; waitForEnd: true }
     stderr: StdioCollector { id: versionStderr; waitForEnd: true }
     onExited: function (exitCode) {
-      // The timeout above already called running = false and ran its own
-      // cleanup. onExited still fires afterward (SIGTERM delivery is async)
-      // — do not let that stale exit re-run this path on top of it.
+      // Stale post-timeout exit — see the _versionTimedOut comment above.
       if (root._versionTimedOut) { root._versionTimedOut = false; return }
       versionTimeout.stop()
       root._versionExited = true
@@ -719,8 +723,7 @@ Item {
     stdout: StdioCollector { id: statusStdout; waitForEnd: true }
     stderr: StdioCollector { id: statusStderr; waitForEnd: true }
     onExited: function (exitCode) {
-      // Timeout above already called running = false and ran its own
-      // cleanup; onExited still fires after that (SIGTERM is async) — ignore it.
+      // Stale post-timeout exit — see the _versionTimedOut comment above.
       if (root._statusTimedOut) { root._statusTimedOut = false; return }
       statusTimeout.stop()
       root._statusExited = true
@@ -763,8 +766,7 @@ Item {
     stdout: StdioCollector { id: doctorStdout; waitForEnd: true }
     stderr: StdioCollector { id: doctorStderr; waitForEnd: true }
     onExited: function (exitCode) {
-      // Timeout above already called running = false and ran its own
-      // cleanup; onExited still fires after that (SIGTERM is async) — ignore it.
+      // Stale post-timeout exit — see the _versionTimedOut comment above.
       if (root._doctorTimedOut) { root._doctorTimedOut = false; return }
       doctorTimeout.stop()
       root._doctorExited = true
