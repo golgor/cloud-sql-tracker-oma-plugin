@@ -574,7 +574,10 @@ Item {
         // timeout message with the generic cli_missing one.
         root._versionTimedOut = true
         root._versionExited = true
-        versionProc.signal(9)   // SIGTERM is trappable; a hung CLI must not outlive its timeout
+        // We send SIGKILL: SIGTERM is trappable and a hung CLI must not
+        // outlive its timeout. running = false is bookkeeping only — signal(9)
+        // is what ends it.
+        versionProc.signal(9)
         versionProc.running = false
         if (root._versionProcGeneration !== root._settingsGeneration) return
         root.loaded = true
@@ -594,7 +597,7 @@ Item {
         console.warn("Tracker: statusProc timed out after 3s, terminating process")
         root._statusTimedOut = true
         root._statusExited = true
-        statusProc.signal(9)   // SIGTERM is trappable; a hung CLI must not outlive its timeout
+        statusProc.signal(9)   // SIGKILL: see versionTimeout
         statusProc.running = false
         root.loaded = true
         root._applyParsed({
@@ -617,7 +620,7 @@ Item {
         console.warn("Tracker: doctorProc timed out after 5s, terminating process")
         root._doctorTimedOut = true
         root._doctorExited = true
-        doctorProc.signal(9)   // SIGTERM is trappable; a hung CLI must not outlive its timeout
+        doctorProc.signal(9)   // SIGKILL: see versionTimeout
         doctorProc.running = false
         root._doctorPending = false
         if (root._doctorProcGeneration !== root._settingsGeneration) return
@@ -637,7 +640,7 @@ Item {
         console.warn("Tracker: actionProc timed out after 15s, terminating process")
         root._actionTimedOut = true
         root._actionExited = true
-        actionProc.signal(9)   // SIGTERM is trappable; a hung CLI must not outlive its timeout
+        actionProc.signal(9)   // SIGKILL: see versionTimeout
         actionProc.running = false
         root.busyKey = ""
         root._actionEpoch++
@@ -801,11 +804,10 @@ Item {
     stdout: StdioCollector { id: actionStdout; waitForEnd: true }
     stderr: StdioCollector { id: actionStderr; waitForEnd: true }
     onExited: function (exitCode) {
-      // Timeout above already called running = false and ran its own
-      // cleanup (busyKey, _actionEpoch, actionErrors). onExited still fires
-      // after that (SIGTERM is async) — without this guard it double-bumps
-      // _actionEpoch and overwrites the timeout message with "exited with
-      // code 15".
+      // Timeout above already sent SIGKILL, called running = false, and ran
+      // its own cleanup (busyKey, _actionEpoch, actionErrors). onExited still
+      // fires after that — without this guard it double-bumps _actionEpoch
+      // and overwrites the timeout message with "exited with code 9".
       if (root._actionTimedOut) { root._actionTimedOut = false; return }
       actionTimeout.stop()
       root._actionExited = true
