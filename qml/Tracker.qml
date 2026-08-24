@@ -21,6 +21,11 @@ Item {
   // "Poll: slower when closed, faster when open".
   property bool panelOpen: false
 
+  // Set by BarWidget from the shell's barHidden state (issue #52); see
+  // DESIGN.md "Doctor-on-open" for the gate this feeds. Host sets false
+  // only when it has no reader for the count; default true polls.
+  property bool barVisible: true
+
   readonly property string cliPath: _stringSetting("cliPath", "cloud-sql-tracker")
   readonly property string minCliVersion: _stringSetting("minCliVersion", "0.1.0")
   readonly property int refreshIntervalSec: _intSetting("refreshIntervalSec", 5, 2, 60)
@@ -700,7 +705,11 @@ Item {
   Timer {
     id: pollTimer
     interval: (root.panelOpen ? root.refreshIntervalOpenSec : root.refreshIntervalSec) * 1000
-    running: true
+    // Bar hidden AND panel closed → no new polls (#52); an open panel
+    // still needs its 2s cadence even if the shell parks the bar
+    // off-screen without closing it (rows must keep advancing). See
+    // BarWidget.qml for why barVisible defaults true.
+    running: root.barVisible || root.panelOpen
     repeat: true
     triggeredOnStart: true
     onTriggered: root.refresh()
