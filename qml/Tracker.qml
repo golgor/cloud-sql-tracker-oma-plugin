@@ -313,6 +313,14 @@ Singleton {
   // degraded".
   property bool loaded: false
 
+  // True from doctor request until the preflight settles (report applied,
+  // or the doctor Process never started). Panel reads this to keep the
+  // keyboard cursor in place while the switchboard is hidden for "Checking
+  // setup…" instead of resetting it (issue #38). Documented alias for the
+  // internal _doctorPending flag below (issue #51) — the two always agree,
+  // since this is a plain passthrough, not a second copy of the state.
+  readonly property bool preflightPending: root._doctorPending
+
   // Doctor preflight: null = not run this settings generation; true/false
   // after runDoctor(). Hard fail wins over a healthy Status for the panel
   // (full-body Degraded, no connection list).
@@ -324,6 +332,7 @@ Singleton {
   property bool _doctorWanted: false
   // True from doctor request until _applyDoctorReport settles. Healthy Status
   // must not clear Degraded or show the switchboard while this is true.
+  // Private: callers read preflightPending above, never this.
   property bool _doctorPending: false
 
   // Issue #54 round 2/4: closing the last open panel ends this doctor
