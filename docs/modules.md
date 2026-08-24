@@ -225,6 +225,7 @@ read reactively on every poll tick, nothing caches them.
 | `actionErrors` | Map `id → { message, verb, exitCode }` for failed start/stop on that Connection. Cleared for the action's target scope on success. Not Degraded — Status may still be healthy (issue #31). |
 | `actionEpoch` / `documentEpoch` | Document provenance — see below |
 | `loaded` | At least one status or version attempt finished |
+| `preflightPending` | `true` from `runDoctor()` request until the preflight settles. Panel uses this to keep the keyboard cursor in place while the switchboard is hidden for "Checking setup…" (issue #38) |
 
 **`degraded.kind` (v1):** `cli_missing` | `cli_old` | `schema` | `status_failed` | `doctor_failed`
 

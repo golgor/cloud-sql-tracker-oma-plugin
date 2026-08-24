@@ -429,7 +429,7 @@ Panel {
     var sections = root.visibleSections
     if (sections.length === 0) {
       // Do not wipe remembered cursor while doctor preflight is pending (#37).
-      if (root.degraded !== null && root.degraded.kind === "doctor_failed" && root.tracker && root.tracker._doctorPending)
+      if (root.degraded !== null && root.degraded.kind === "doctor_failed" && root.tracker && root.tracker.preflightPending)
         return
       root.resetCursor()
       return
