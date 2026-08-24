@@ -17,7 +17,9 @@ var KNOWN_HEALTH_STATES = ["stopped", "starting", "running", "error"]
 //   { ok: true, degraded: null, version: 1, ts, cliVersion,
 //     running, starting, error, stopped, total, groups, connections }
 //
-// Failure (malformed JSON or unsupported schema version):
+// Failure (malformed JSON, unsupported schema version, or a document that
+// does not match the contract shape — issue #47: a broken control plane
+// must not read as a healthy, empty setup):
 //   { ok: false, degraded: { kind: "schema", message }, version, ts: null,
 //     cliVersion: null, running: 0, starting: 0, error: 0, stopped: 0,
 //     total: 0, groups: [], connections: [] }
@@ -43,7 +45,21 @@ function parseStatusDocument(text) {
     )
   }
 
+  // Fail closed on shape (issue #47): a document that only carries the right
+  // `version` must not read as a valid, empty setup. `connections` must be
+  // an array and `groups` must be an object, per
+  // cloud-sql-tracker/docs/status-document.v1.md.
+  if (!Array.isArray(parsed.connections)) {
+    return schemaFailure("Status document field \"connections\" must be an array.", 1)
+  }
+  if (!parsed.groups || typeof parsed.groups !== "object" || Array.isArray(parsed.groups)) {
+    return schemaFailure("Status document field \"groups\" must be an object.", 1)
+  }
+
   var connections = parseConnections(parsed.connections)
+  if (connections === null) {
+    return schemaFailure("A connection in the Status document is missing a required field or has the wrong type.", 1)
+  }
   // UI counts are enabled-only (issue #26). Document totals still include
   // disabled rows; consumers that need "is the list empty?" use
   // connections.length, not `total`.
@@ -167,43 +183,76 @@ function enabledAggregates(connections) {
   }
 }
 
+// CLI contract charset for id and Group targets (cli-contract.v1.md). A
+// leading '-' or '--' would be read as a flag by argv parsing; the charset
+// starts with an alnum so that can never happen (issue #47, agrees with #49).
+var CONNECTION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/
+
+// Returns the parsed Connection list, or null if any element fails the
+// contract's type/range for a field this plugin reads. A malformed
+// Connection fails the whole document (issue #47) instead of being dropped
+// or defaulted — a defaulted empty id/port/Group can otherwise reach
+// _targetArgs and read as a healthy, empty setup.
 function parseConnections(rawConnections) {
-  var list = Array.isArray(rawConnections) ? rawConnections : []
   var out = []
-  for (var i = 0; i < list.length; i++) {
-    var c = list[i]
-    if (!c || typeof c !== "object") continue
-    var id = typeof c.id === "string" ? c.id : ""
-    out.push({
-      id: id,
-      name: typeof c.name === "string" ? c.name : id,
-      group: typeof c.group === "string" ? c.group : "",
-      state: parseHealthState(c.state),
-      port: toCount(c.port),
-      address: typeof c.address === "string" ? c.address : "",
-      // Missing field (older CLI) → true. Only explicit false is disabled.
-      enabled: c.enabled !== false,
-      error: parseConnectionError(c.error)
-    })
+  for (var i = 0; i < rawConnections.length; i++) {
+    var connection = parseConnection(rawConnections[i])
+    if (connection === null) return null
+    out.push(connection)
   }
   return out
 }
 
+// Checks only the fields Tracker/Panel read from a Connection: id, name,
+// group, state, port, address, enabled, error. Fields the plugin never
+// reads (instance, private_ip, source, pid, unit, port_open, uptime_sec)
+// are ignored, per the Status document "ignore unknown fields" rule.
+function parseConnection(c) {
+  if (!c || typeof c !== "object" || Array.isArray(c)) return null
+  if (typeof c.id !== "string" || !CONNECTION_ID_PATTERN.test(c.id)) return null
+  if (typeof c.name !== "string") return null
+  if (typeof c.group !== "string") return null
+  if (typeof c.state !== "string") return null
+  if (!isValidPort(c.port)) return null
+  if (typeof c.address !== "string") return null
+  if (c.enabled !== undefined && typeof c.enabled !== "boolean") return null
+  var error = parseConnectionError(c.error)
+  if (error === undefined) return null
+
+  return {
+    id: c.id,
+    name: c.name,
+    group: c.group,
+    state: parseHealthState(c.state),
+    port: c.port,
+    address: c.address,
+    // Missing field (older CLI) → true. Only explicit false is disabled.
+    enabled: c.enabled !== false,
+    error: error
+  }
+}
+
+function isValidPort(value) {
+  return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 65535
+}
+
+// A present-but-unrecognized state is a forward-compat future enum value
+// (status-document.v1.md "additive" rule) and degrades to "error" per row,
+// not a schema failure. A state field that is not a string at all is a
+// malformed document — parseConnection rejects that before this runs.
 function parseHealthState(value) {
   return KNOWN_HEALTH_STATES.indexOf(value) !== -1 ? value : "error"
 }
 
+// Returns null when there is no error (contract default), the parsed
+// { code, detail } object, or undefined when `error` is present but does
+// not match the contract shape — the undefined sentinel tells the caller
+// to reject the whole document rather than default a row silently.
 function parseConnectionError(raw) {
-  if (!raw || typeof raw !== "object") return null
-  return {
-    code: typeof raw.code === "string" ? raw.code : "unknown",
-    detail: typeof raw.detail === "string" ? raw.detail : ""
-  }
-}
-
-function toCount(value) {
-  var n = parseInt(value, 10)
-  return isNaN(n) ? 0 : n
+  if (raw === null || raw === undefined) return null
+  if (typeof raw !== "object" || Array.isArray(raw)) return undefined
+  if (typeof raw.code !== "string" || typeof raw.detail !== "string") return undefined
+  return { code: raw.code, detail: raw.detail }
 }
 
 if (typeof module !== "undefined") {

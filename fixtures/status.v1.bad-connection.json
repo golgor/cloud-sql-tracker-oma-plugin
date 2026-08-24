@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "ts": "2026-08-20T19:45:00+02:00",
+  "cli_version": "0.1.0",
+  "running": 0,
+  "starting": 0,
+  "error": 0,
+  "stopped": 1,
+  "total": 1,
+  "groups": {
+    "backend": {
+      "running": 0,
+      "starting": 0,
+      "error": 0,
+      "stopped": 1,
+      "total": 1
+    }
+  },
+  "connections": [
+    {
+      "id": "backend-dev",
+      "name": "Backend Dev",
+      "group": "backend",
+      "instance": "toolsense-dev:europe-west1:backend-postgres-1",
+      "address": "127.0.0.1",
+      "port": 15432,
+      "private_ip": false,
+      "enabled": true,
+      "source": "unit",
+      "pid": null,
+      "unit": "cloud-sql-proxy-backend-dev.service",
+      "port_open": false,
+      "uptime_sec": null,
+      "error": null
+    }
+  ]
+}
