@@ -344,6 +344,7 @@ Item {
   function _checkVersion() {
     if (versionProc.running) return
     _versionExited = false
+    root._versionOverflow = ""
     _versionProcGeneration = root._settingsGeneration
     versionProc.command = [root.cliPath, "--version"]
     versionTimeout.restart()
@@ -358,6 +359,7 @@ Item {
     // measures ~23ms against this 50ms retry.
     if (statusProc.running) { pendingStatus.restart(); return }
     _statusExited = false
+    root._statusOverflow = ""
     root._statusLaunchEpoch = root._actionEpoch
     statusProc.command = [root.cliPath, "status", "--json"]
     statusTimeout.restart()
@@ -370,6 +372,7 @@ Item {
     if (root.degraded === null || root.degraded.kind === "doctor_failed")
       root._setDegraded("doctor_failed", "Checking setup…")
     _doctorExited = false
+    root._doctorOverflow = ""
     _doctorProcGeneration = root._settingsGeneration
     doctorProc.command = [root.cliPath, "doctor", "--json"]
     doctorTimeout.restart()
@@ -398,6 +401,7 @@ Item {
     root._pendingActionVerb = verb
     root._pendingActionTarget = target
     _actionExited = false
+    root._actionOverflow = ""
     actionProc.command = [root.cliPath, verb].concat(args)
     actionTimeout.restart()
     actionProc.running = true
@@ -427,6 +431,20 @@ Item {
   property bool _actionTimedOut: false
   property bool _doctorTimedOut: false
 
+  // Set by an onDataChanged byte guard on that process's stdout/stderr
+  // StdioCollector, right before signal(9) + running = false, when the CLI's
+  // output crosses this process's ceiling (#41). "" means no overflow.
+  // Non-empty carries the message to report. The matching onExited reads it
+  // first, reports the overflow as this process's failure instead of
+  // parsing the (incomplete, killed-mid-stream) buffer, and clears it back
+  // to "" so the next launch starts clean — same shape as the
+  // _xxxTimedOut flags above, so the overflow, timeout, and normal-exit
+  // paths never both apply a state for the same run.
+  property string _versionOverflow: ""
+  property string _statusOverflow: ""
+  property string _doctorOverflow: ""
+  property string _actionOverflow: ""
+
   // Bumped by onSettingsChanged. _versionProcGeneration captures the value
   // at the moment a versionProc launch is kicked off, so its exit handlers
   // can tell a stale in-flight probe (started against a cliPath/
@@ -443,13 +461,16 @@ Item {
     return "Could not run '" + root.cliPath + "'. Check the cliPath setting or your PATH."
   }
 
-  // Safety helper to read StdioCollector output with a hard character cap
-  // (default 16 KB = 16,384 chars). Prevents memory growth from CLI output flooding.
+  // Safety helper to read StdioCollector output with a hard character cap.
+  // maxLen is required — a default here is what let #42 truncate a valid
+  // Status document into broken JSON. Memory growth from a flooding CLI is
+  // now bounded at the producer, by the byte guards on each StdioCollector
+  // below (#41); this helper only trims strings a human reads (stderr
+  // lines, the version string) to a sane display length.
   function _safeText(collector, maxLen) {
     if (!collector || typeof collector.text !== "string") return ""
     var text = collector.text
-    var cap = (typeof maxLen === "number" && maxLen > 0) ? maxLen : 16384
-    return text.length > cap ? text.substring(0, cap) : text
+    return text.length > maxLen ? text.substring(0, maxLen) : text
   }
 
   // Prefer CLI stderr (often multi-line with a useful last line). Fall back to
@@ -666,8 +687,30 @@ Item {
     id: versionProc
     running: false
     command: []
-    stdout: StdioCollector { id: versionStdout; waitForEnd: true }
-    stderr: StdioCollector { id: versionStderr; waitForEnd: true }
+    // waitForEnd: false + a byte guard bounds memory at the producer instead
+    // of after StdioCollector has already buffered an unbounded stream (#41).
+    stdout: StdioCollector {
+      id: versionStdout
+      waitForEnd: false
+      onDataChanged: {
+        if (root._versionOverflow === "" && data.byteLength > 65536) {
+          root._versionOverflow = "'--version' produced more than 64 KB of output."
+          versionProc.signal(9)   // SIGKILL: see versionTimeout
+          versionProc.running = false
+        }
+      }
+    }
+    stderr: StdioCollector {
+      id: versionStderr
+      waitForEnd: false
+      onDataChanged: {
+        if (root._versionOverflow === "" && data.byteLength > 65536) {
+          root._versionOverflow = "'--version' stderr produced more than 64 KB of output."
+          versionProc.signal(9)   // SIGKILL: see versionTimeout
+          versionProc.running = false
+        }
+      }
+    }
     onExited: function (exitCode) {
       // Stale post-timeout exit — see the _versionTimedOut comment above.
       if (root._versionTimedOut) { root._versionTimedOut = false; return }
@@ -678,9 +721,18 @@ Item {
         // flight. Its result no longer applies — do not let a stale pass or
         // fail decide _versionOk/degraded for the *current* settings. The
         // next refresh() (poll tick or explicit call) starts a fresh probe.
+        root._versionOverflow = ""
         return
       }
       root.loaded = true
+      if (root._versionOverflow !== "") {
+        var overflowMsg = root._versionOverflow
+        root._versionOverflow = ""
+        root._doctorWanted = false
+        root._doctorPending = false
+        root._setDegraded("cli_missing", overflowMsg)
+        return
+      }
       if (exitCode !== 0) {
         var err = String(root._safeText(versionStderr, 2048) || "").trim()
         root._doctorWanted = false
@@ -688,7 +740,7 @@ Item {
         root._setDegraded("cli_missing", err !== "" ? err : ("'" + root.cliPath + " --version' exited with code " + exitCode + "."))
         return
       }
-      var text = String(root._safeText(versionStdout) || "").trim()
+      var text = String(root._safeText(versionStdout, 2048) || "").trim()
       if (!root._versionAtLeast(text, root.minCliVersion)) {
         root._doctorWanted = false
         root._doctorPending = false
@@ -723,13 +775,43 @@ Item {
     id: statusProc
     running: false
     command: []
-    stdout: StdioCollector { id: statusStdout; waitForEnd: true }
-    stderr: StdioCollector { id: statusStderr; waitForEnd: true }
+    // waitForEnd: false + a byte guard bounds memory at the producer instead
+    // of after StdioCollector has already buffered an unbounded stream (#41).
+    // The Status document is the largest thing this plugin parses, so its
+    // ceiling (1 MB) is the highest of the four processes.
+    stdout: StdioCollector {
+      id: statusStdout
+      waitForEnd: false
+      onDataChanged: {
+        if (root._statusOverflow === "" && data.byteLength > 1048576) {
+          root._statusOverflow = "status --json produced more than 1 MB of output."
+          statusProc.signal(9)   // SIGKILL: see versionTimeout
+          statusProc.running = false
+        }
+      }
+    }
+    stderr: StdioCollector {
+      id: statusStderr
+      waitForEnd: false
+      onDataChanged: {
+        if (root._statusOverflow === "" && data.byteLength > 65536) {
+          root._statusOverflow = "status --json stderr produced more than 64 KB of output."
+          statusProc.signal(9)   // SIGKILL: see versionTimeout
+          statusProc.running = false
+        }
+      }
+    }
     onExited: function (exitCode) {
       // Stale post-timeout exit — see the _versionTimedOut comment above.
       if (root._statusTimedOut) { root._statusTimedOut = false; return }
       statusTimeout.stop()
       root._statusExited = true
+      if (root._statusOverflow !== "") {
+        var overflowMsg = root._statusOverflow
+        root._statusOverflow = ""
+        root._applyParsed({ ok: false, degraded: { kind: "status_failed", message: overflowMsg } })
+        return
+      }
       if (exitCode !== 0) {
         var err = String(root._safeText(statusStderr, 2048) || "").trim()
         var msg = err !== "" ? err : ("status --json exited with code " + exitCode + ".")
@@ -746,7 +828,10 @@ Item {
         })
         return
       }
-      root._applyParsed(Model.parseStatusDocument(String(root._safeText(statusStdout) || "")))
+      // No length cap here (#42) — a valid Status document must parse in
+      // full. statusStdout's byte guard above is the only ceiling; once it
+      // has not tripped, the whole buffer is fair game for Model.js.
+      root._applyParsed(Model.parseStatusDocument(String(statusStdout.text || "")))
     }
     onRunningChanged: {
       if (!running) statusTimeout.stop()
@@ -766,8 +851,30 @@ Item {
     id: doctorProc
     running: false
     command: []
-    stdout: StdioCollector { id: doctorStdout; waitForEnd: true }
-    stderr: StdioCollector { id: doctorStderr; waitForEnd: true }
+    // waitForEnd: false + a byte guard bounds memory at the producer instead
+    // of after StdioCollector has already buffered an unbounded stream (#41).
+    stdout: StdioCollector {
+      id: doctorStdout
+      waitForEnd: false
+      onDataChanged: {
+        if (root._doctorOverflow === "" && data.byteLength > 1048576) {
+          root._doctorOverflow = "doctor --json produced more than 1 MB of output."
+          doctorProc.signal(9)   // SIGKILL: see versionTimeout
+          doctorProc.running = false
+        }
+      }
+    }
+    stderr: StdioCollector {
+      id: doctorStderr
+      waitForEnd: false
+      onDataChanged: {
+        if (root._doctorOverflow === "" && data.byteLength > 65536) {
+          root._doctorOverflow = "doctor --json stderr produced more than 64 KB of output."
+          doctorProc.signal(9)   // SIGKILL: see versionTimeout
+          doctorProc.running = false
+        }
+      }
+    }
     onExited: function (exitCode) {
       // Stale post-timeout exit — see the _versionTimedOut comment above.
       if (root._doctorTimedOut) { root._doctorTimedOut = false; return }
@@ -775,12 +882,22 @@ Item {
       root._doctorExited = true
       if (root._doctorProcGeneration !== root._settingsGeneration) {
         // Settings (cliPath) changed while doctor was in flight — drop result.
+        root._doctorOverflow = ""
         root._doctorPending = false
         return
       }
+      if (root._doctorOverflow !== "") {
+        var overflowMsg = root._doctorOverflow
+        root._doctorOverflow = ""
+        root._doctorOk = false
+        root._doctorFailMessage = overflowMsg
+        root._setDegraded("doctor_failed", overflowMsg)
+        return
+      }
       // Doctor exits 3 when ok is false but still prints JSON — parse stdout
-      // first. Non-JSON / empty stdout uses stderr or exit code.
-      root._applyDoctorReport(String(root._safeText(doctorStdout) || ""), exitCode)
+      // first. Non-JSON / empty stdout uses stderr or exit code. No length
+      // cap here (#42) — same reasoning as statusStdout above.
+      root._applyDoctorReport(String(doctorStdout.text || ""), exitCode)
     }
     onRunningChanged: {
       if (!running) doctorTimeout.stop()
@@ -801,8 +918,30 @@ Item {
     id: actionProc
     running: false
     command: []
-    stdout: StdioCollector { id: actionStdout; waitForEnd: true }
-    stderr: StdioCollector { id: actionStderr; waitForEnd: true }
+    // waitForEnd: false + a byte guard bounds memory at the producer instead
+    // of after StdioCollector has already buffered an unbounded stream (#41).
+    stdout: StdioCollector {
+      id: actionStdout
+      waitForEnd: false
+      onDataChanged: {
+        if (root._actionOverflow === "" && data.byteLength > 65536) {
+          root._actionOverflow = "'" + (root._pendingActionVerb !== "" ? root._pendingActionVerb : "action") + "' produced more than 64 KB of output."
+          actionProc.signal(9)   // SIGKILL: see versionTimeout
+          actionProc.running = false
+        }
+      }
+    }
+    stderr: StdioCollector {
+      id: actionStderr
+      waitForEnd: false
+      onDataChanged: {
+        if (root._actionOverflow === "" && data.byteLength > 65536) {
+          root._actionOverflow = "'" + (root._pendingActionVerb !== "" ? root._pendingActionVerb : "action") + "' stderr produced more than 64 KB of output."
+          actionProc.signal(9)   // SIGKILL: see versionTimeout
+          actionProc.running = false
+        }
+      }
+    }
     onExited: function (exitCode) {
       // Timeout above already sent SIGKILL, called running = false, and ran
       // its own cleanup (busyKey, _actionEpoch, actionErrors). onExited still
@@ -816,6 +955,23 @@ Item {
       var verb = root._pendingActionVerb !== "" ? root._pendingActionVerb : "action"
       var target = root._pendingActionTarget
       var ids = root._idsForTarget(target)
+      // start/stop have no global Degraded state — an overflow here is a row
+      // failure like any other action failure (actionErrors), not a Tracker
+      // degraded kind.
+      if (root._actionOverflow !== "") {
+        var overflowMsg = root._actionOverflow
+        root._actionOverflow = ""
+        console.warn("Tracker: " + overflowMsg)
+        if (ids.length > 0) {
+          root._setActionErrorsForIds(ids, {
+            message: overflowMsg,
+            verb: verb,
+            exitCode: -1
+          })
+        }
+        delayedRefresh.restart()
+        return
+      }
       if (exitCode !== 0) {
         var out = String(root._safeText(actionStdout, 2048) || "").trim()
         var err = String(root._safeText(actionStderr, 2048) || "").trim()
