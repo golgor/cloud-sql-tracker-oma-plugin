@@ -69,15 +69,20 @@ Item {
   // Per-connection start/stop failures the panel paints on the row (not a
   // global banner). Map id → { message, verb, exitCode }. Cleared for the
   // action's target scope on the next successful action. Issue #31.
-  property var actionErrors: ({})
+  //
+  // Object.create(null): ids are CLI-controlled Connection ids (issue #44) —
+  // a bare {} would let an id matching an Object.prototype member
+  // ("constructor", "toString", ...) read as present, drop rows, or clear
+  // the wrong row's error.
+  property var actionErrors: Object.create(null)
 
   function clearActionError(id) {
     if (id === undefined || id === null || id === "") {
-      root.actionErrors = ({})
+      root.actionErrors = Object.create(null)
       return
     }
     if (!Object.prototype.hasOwnProperty.call(root.actionErrors, id)) return
-    var next = {}
+    var next = Object.create(null)
     for (var k in root.actionErrors) {
       if (k !== id) next[k] = root.actionErrors[k]
     }
@@ -305,7 +310,7 @@ Item {
   }
 
   function _setActionErrorsForIds(ids, entry) {
-    var next = {}
+    var next = Object.create(null)
     for (var k in root.actionErrors) next[k] = root.actionErrors[k]
     for (var i = 0; i < ids.length; i++)
       next[ids[i]] = entry
@@ -314,9 +319,13 @@ Item {
 
   function _clearActionErrorsForIds(ids) {
     if (!ids || ids.length === 0) return
-    var drop = {}
+    // Object.create(null): drop is a membership set over CLI-controlled ids
+    // (issue #44). A bare {} answers drop["toString"] truthily for an id
+    // that was never added to `ids`, which dropped that row's real error on
+    // an unrelated successful action.
+    var drop = Object.create(null)
     for (var i = 0; i < ids.length; i++) drop[ids[i]] = true
-    var next = {}
+    var next = Object.create(null)
     var changed = false
     for (var k in root.actionErrors) {
       if (drop[k]) { changed = true; continue }

@@ -447,7 +447,11 @@ Panel {
   //
   // Reassigned wholesale rather than mutated, because mutating a var in place
   // does not re-evaluate bindings that read it.
-  property var intents: ({})
+  //
+  // Object.create(null): ids are CLI-controlled Connection ids (issue #44) —
+  // a bare {} would let an id matching an Object.prototype member
+  // ("constructor", "toString", ...) read as an already-held intent.
+  property var intents: Object.create(null)
 
   // Tracker's actionEpoch at the moment the outstanding intents were written.
   // One value, not one per id: Panel's command guard means at most one action is
@@ -463,7 +467,7 @@ Panel {
   }
 
   function setIntent(id, on) {
-    var next = {}
+    var next = Object.create(null)
     for (var k in root.intents) next[k] = root.intents[k]
     next[id] = on
     root.intentEpoch = root.actionEpoch
@@ -471,7 +475,7 @@ Panel {
   }
 
   function setIntentForList(list, on) {
-    var next = {}
+    var next = Object.create(null)
     for (var k in root.intents) next[k] = root.intents[k]
     for (var i = 0; i < list.length; i++) next[list[i].id] = on
     root.intentEpoch = root.actionEpoch
@@ -498,7 +502,7 @@ Panel {
     if (root.trackerBusy) return
     if (Object.keys(root.intents).length === 0) return
     if (root.documentEpoch <= root.intentEpoch) return
-    root.intents = ({})
+    root.intents = Object.create(null)
   }
 
   // ---- Busy (chrome.md §5) ------------------------------------------------
