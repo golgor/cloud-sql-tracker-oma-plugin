@@ -39,6 +39,11 @@ Item {
     root._doctorFailMessage = ""
     root._doctorWanted = false
     root._doctorPending = false
+    // A retry armed under the old settings must not launch an ungated poll
+    // against the new cliPath. The flag can straddle up to statusTimeout's
+    // 3s (#45), unlike the old 50ms timer, so it needs the same reset the
+    // doctor flags above already get.
+    root._statusRetryWanted = false
   }
 
   // ---- View out (docs/modules.md "Tracker interface") ----------------------
@@ -405,9 +410,11 @@ Item {
     // A poll asked for while one is in flight is *retried*, never dropped.
     // delayedRefresh is the only guaranteed post-action read, and silently
     // losing it left the panel on pre-action truth until the next tick.
-    // Self-limiting: at most one retry is ever armed, and a status poll here
-    // measures ~23ms against this 50ms retry.
-    if (statusProc.running) { pendingStatus.restart(); return }
+    // The retry is a flag, read once statusProc actually stops (its
+    // onRunningChanged below) — not a self-arming timer. A timer here
+    // used to retrigger every 50ms with no stop condition while a poll
+    // stayed stuck, waking the CPU at 20 Hz (#45).
+    if (statusProc.running) { root._statusRetryWanted = true; return }
     _statusExited = false
     root._statusOverflow = ""
     root._statusStdoutFresh = false
@@ -492,6 +499,12 @@ Item {
   property bool _actionExited: true
   property bool _doctorExited: true
 
+  // Set by _checkStatus's bail path when a poll is requested while one is
+  // already in flight. statusProc's onRunningChanged reads and clears this
+  // flag, then polls once more — a flag, not a timer, so a stuck CLI cannot
+  // turn the retry into an unbounded loop (#45).
+  property bool _statusRetryWanted: false
+
   // Set by a timeout handler right before signal(9) + running = false,
   // cleared at the top of the matching onExited. onExited still fires after
   // that — signal delivery is async, and Quickshell reports the result as a
@@ -546,6 +559,22 @@ Item {
 
   function _missingCliMessage() {
     return "Could not run '" + root.cliPath + "'. Check the cliPath setting or your PATH."
+  }
+
+  // Reads and clears _statusRetryWanted, then polls once more. Called only
+  // from statusProc's onRunningChanged(!running) — the one point Quickshell
+  // guarantees `running` has actually settled to false, covering every exit
+  // path including "process never started" (#45). Qt.callLater moves the
+  // launch out of this signal handler. The flag, not Qt.callLater, is what
+  // bounds this to one retry: it is cleared before the deferred call is
+  // scheduled, so a duplicate call finds it false and does nothing. This
+  // depends on `running = false` being an asynchronous request, not a
+  // synchronous state flip (see versionTimeout's comment).
+  function _retryStatusIfWanted() {
+    if (root._statusRetryWanted) {
+      root._statusRetryWanted = false
+      Qt.callLater(root._checkStatus)
+    }
   }
 
   // Safety helper to read StdioCollector output with a hard character cap.
@@ -685,16 +714,6 @@ Item {
     interval: 500
     repeat: false
     onTriggered: root.refresh()
-  }
-
-  // Re-runs a poll _checkStatus could not start because one was in flight.
-  // Only _checkStatus's own bail path arms it, so exactly one retry is pending
-  // at a time.
-  Timer {
-    id: pendingStatus
-    interval: 50
-    repeat: false
-    onTriggered: root._checkStatus()
   }
 
   // ---- Process execution timeouts ------------------------------------------
@@ -970,6 +989,13 @@ Item {
       // it on streamEnded()) — feed "" instead so this settles Degraded like
       // any other empty document, not the stale one.
       root._applyParsed(Model.parseStatusDocument(root._statusStdoutFresh ? String(statusStdout.text || "") : ""))
+      // No retry check here: statusProc.running still reads true at this
+      // point (runningChanged(false) fires *after* exited — see
+      // versionTimeout's comment above), so _checkStatus() would just bail
+      // and re-set the flag. onRunningChanged below is the single point
+      // where running has actually settled to false, and it is total: it
+      // also covers the "process never started" exit, which never reaches
+      // onExited at all.
     }
     onRunningChanged: {
       if (!running) statusTimeout.stop()
@@ -982,6 +1008,7 @@ Item {
         root._versionOk = false
         root._setDegraded("cli_missing", root._missingCliMessage())
       }
+      if (!running) root._retryStatusIfWanted()
     }
   }
 
