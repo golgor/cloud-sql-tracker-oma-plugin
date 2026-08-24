@@ -88,7 +88,11 @@ function schemaFailure(message, version) {
 function parseGroups(rawGroups, connections) {
   var source = rawGroups && typeof rawGroups === "object" ? rawGroups : {}
   var names = []
-  var seen = {}
+  // Object.create(null): group names are CLI-controlled free text (issue
+  // #44) and a name matching an Object.prototype member ("constructor",
+  // "toString", ...) would otherwise read as already-seen and drop the
+  // Group before it is ever added.
+  var seen = Object.create(null)
 
   // Group order: first appearance in connections (including disabled), then
   // any orphan keys still present in the document's groups map.

@@ -75,6 +75,33 @@ function checkHappyFixture() {
   console.log("ok: happy fixture (7 connections, enabled-only totals, fe-dev error mapped)")
 }
 
+// Issue #44: group names are CLI-controlled free text. A bare {} used as a
+// lookup map inherits Object.prototype, so a group named "constructor",
+// "toString", or "__proto__" read as already-seen and never entered the
+// group list, even though the connections were still counted in totals.
+function checkPrototypePollutingGroupNames() {
+  var doc = {
+    version: 1,
+    connections: [
+      { id: "a", name: "A", group: "constructor", state: "running", port: 1, address: "127.0.0.1" },
+      { id: "b", name: "B", group: "toString", state: "running", port: 2, address: "127.0.0.1" },
+      { id: "c", name: "C", group: "__proto__", state: "running", port: 3, address: "127.0.0.1" },
+      { id: "d", name: "D", group: "ok", state: "running", port: 4, address: "127.0.0.1" }
+    ]
+  }
+  var result = Model.parseStatusDocument(JSON.stringify(doc))
+  var names = result.groups.map(function (g) { return g.name })
+
+  assert.deepStrictEqual(
+    names,
+    ["constructor", "toString", "__proto__", "ok"],
+    "groups named after Object.prototype members must still appear"
+  )
+  assert.strictEqual(result.total, 4, "bar count must match the number of rows the panel can draw")
+
+  console.log("ok: group names colliding with Object.prototype members are not dropped")
+}
+
 function checkBadVersionFixture() {
   var result = Model.parseStatusDocument(readFixture("status.v1.bad-version.json"))
 
@@ -111,6 +138,7 @@ function checkMalformedJson() {
 }
 
 checkHappyFixture()
+checkPrototypePollutingGroupNames()
 checkBadVersionFixture()
 checkEmptyFixture()
 checkMalformedJson()
