@@ -82,6 +82,10 @@ function checkHappyFixture() {
 function checkPrototypePollutingGroupNames() {
   var doc = {
     version: 1,
+    // Issue #47: groups must be a present object, so this synthetic doc
+    // needs one even though the counters inside it are unused here (Model.js
+    // computes group counters from `connections`, not from this map).
+    groups: {},
     connections: [
       { id: "a", name: "A", group: "constructor", state: "running", port: 1, address: "127.0.0.1" },
       { id: "b", name: "B", group: "toString", state: "running", port: 2, address: "127.0.0.1" },
@@ -137,10 +141,169 @@ function checkMalformedJson() {
   console.log("ok: malformed JSON input")
 }
 
+// Issue #47: `{"version":1}` must not read as a valid, empty setup. Before
+// this fix, missing `connections`/`groups` defaulted to `[]`/`{}` and the
+// document parsed as ok:true with total 0 — indistinguishable from a real
+// empty setup. It must fail closed instead.
+function checkVersionOnlyFixture() {
+  var result = Model.parseStatusDocument(readFixture("status.v1.version-only.json"))
+
+  assert.strictEqual(result.ok, false, "a document with only \"version\" must not parse as ok")
+  assert.ok(result.degraded, "version-only fixture should be degraded")
+  assert.strictEqual(result.degraded.kind, "schema")
+  assert.strictEqual(result.total, 0)
+  assert.deepStrictEqual(result.connections, [])
+  assert.deepStrictEqual(result.groups, [])
+
+  console.log("ok: {\"version\":1} alone is rejected (degraded.kind === \"schema\"), not shown healthy")
+}
+
+// Issue #47: `groups` present but the wrong shape (an array, or any
+// non-object) must fail closed too — this branch is otherwise unreachable
+// by the rest of the suite, which only varies `connections`.
+function checkGroupsNotObjectFixture() {
+  var result = Model.parseStatusDocument(JSON.stringify({ version: 1, connections: [], groups: "nope" }))
+
+  assert.strictEqual(result.ok, false, "groups: \"nope\" must not parse as ok")
+  assert.strictEqual(result.degraded.kind, "schema")
+
+  console.log("ok: a non-object \"groups\" is rejected")
+}
+
+// Issue #47: a Connection missing `state` must fail the whole document, not
+// get defaulted (empty id, port 0, state "error") and slip through as one
+// bad row inside an otherwise-healthy view.
+function checkBadConnectionFixture() {
+  var result = Model.parseStatusDocument(readFixture("status.v1.bad-connection.json"))
+
+  assert.strictEqual(result.ok, false, "a Connection missing \"state\" must not parse as ok")
+  assert.ok(result.degraded, "bad-connection fixture should be degraded")
+  assert.strictEqual(result.degraded.kind, "schema")
+  assert.strictEqual(result.total, 0)
+  assert.deepStrictEqual(result.connections, [])
+
+  console.log("ok: a Connection missing \"state\" is rejected (degraded.kind === \"schema\"), not defaulted")
+}
+
+// Issue #47 item 5: an id outside the config.v1.md charset must be
+// rejected, not passed through to reach _targetArgs (qml/Tracker.qml).
+function checkInvalidConnectionIdCharset() {
+  var doc = {
+    version: 1,
+    groups: {},
+    connections: [{
+      id: "-leading-hyphen", name: "Bad", group: "g", state: "stopped",
+      port: 1, address: "127.0.0.1", error: null
+    }]
+  }
+  var result = Model.parseStatusDocument(JSON.stringify(doc))
+
+  assert.strictEqual(result.ok, false, "an id starting with '-' must be rejected")
+  assert.strictEqual(result.degraded.kind, "schema")
+  assert.ok(result.degraded.message.indexOf("-leading-hyphen") !== -1, "message should name the offending id")
+
+  console.log("ok: a Connection id outside the config.v1.md charset is rejected")
+}
+
+// Issue #47 item 3: a port outside the contract's 1-65535 range is a wrong
+// value for a field the plugin reads (and forwards to the CLI), not a
+// harmless default.
+function checkInvalidPortRange() {
+  var doc = {
+    version: 1,
+    groups: {},
+    connections: [{
+      id: "backend-dev", name: "Backend Dev", group: "g", state: "stopped",
+      port: 0, address: "127.0.0.1", error: null
+    }]
+  }
+  var result = Model.parseStatusDocument(JSON.stringify(doc))
+
+  assert.strictEqual(result.ok, false, "port 0 is outside the contract range and must be rejected")
+  assert.strictEqual(result.degraded.kind, "schema")
+
+  console.log("ok: a Connection port outside 1-65535 is rejected")
+}
+
+// Blocker 1 (rework #47): group: "" passes schemas/status.v1.json's
+// minLength 1 check nowhere else, so it must be caught here. Left
+// unrejected, every Connection sharing an empty Group would count toward
+// the bar/panel aggregates while Panel.flatRows never draws that Group's
+// rows — a healthy header over a blank body.
+function checkEmptyGroupRejected() {
+  var doc = {
+    version: 1,
+    groups: {},
+    connections: [{
+      id: "backend-dev", name: "Backend Dev", group: "", state: "stopped",
+      port: 1, address: "127.0.0.1", error: null
+    }]
+  }
+  var result = Model.parseStatusDocument(JSON.stringify(doc))
+
+  assert.strictEqual(result.ok, false, "an empty group must be rejected")
+  assert.strictEqual(result.degraded.kind, "schema")
+  assert.ok(result.degraded.message.indexOf("\"group\"") !== -1, "message should name the \"group\" field")
+
+  console.log("ok: a Connection with an empty \"group\" is rejected")
+}
+
+// Blocker 1 (rework #47): address: "" is the same minLength 1 contract gap
+// as group, and renders as a bare ":<port>" address in the panel.
+function checkEmptyAddressRejected() {
+  var doc = {
+    version: 1,
+    groups: {},
+    connections: [{
+      id: "backend-dev", name: "Backend Dev", group: "g", state: "stopped",
+      port: 1, address: "", error: null
+    }]
+  }
+  var result = Model.parseStatusDocument(JSON.stringify(doc))
+
+  assert.strictEqual(result.ok, false, "an empty address must be rejected")
+  assert.strictEqual(result.degraded.kind, "schema")
+  assert.ok(result.degraded.message.indexOf("\"address\"") !== -1, "message should name the \"address\" field")
+
+  console.log("ok: a Connection with an empty \"address\" is rejected")
+}
+
+// Rework #47 blocker: an oversized id must not reach the Degraded message
+// verbatim (it would blow up the Panel body and the bar tooltip). The
+// message must fall back to "index N" instead of the raw id.
+function checkOversizedIdFallsBackToIndex() {
+  var oversizedId = new Array(201).join("a") // 200 chars, over config.v1.md's 64-char max
+  var doc = {
+    version: 1,
+    groups: {},
+    connections: [{
+      id: oversizedId, name: "Bad", group: "g", state: "stopped",
+      port: 1, address: "127.0.0.1", error: null
+    }]
+  }
+  var result = Model.parseStatusDocument(JSON.stringify(doc))
+
+  assert.strictEqual(result.ok, false, "an oversized id must still be rejected")
+  assert.strictEqual(result.degraded.kind, "schema")
+  assert.ok(result.degraded.message.indexOf("index 0") !== -1, "message should fall back to the index")
+  assert.ok(result.degraded.message.indexOf(oversizedId) === -1, "message must not carry the oversized id")
+  assert.ok(result.degraded.message.length < 200, "message must stay bounded")
+
+  console.log("ok: an oversized id falls back to \"index N\" in the message")
+}
+
 checkHappyFixture()
 checkPrototypePollutingGroupNames()
 checkBadVersionFixture()
 checkEmptyFixture()
 checkMalformedJson()
+checkVersionOnlyFixture()
+checkGroupsNotObjectFixture()
+checkBadConnectionFixture()
+checkInvalidConnectionIdCharset()
+checkInvalidPortRange()
+checkEmptyGroupRejected()
+checkEmptyAddressRejected()
+checkOversizedIdFallsBackToIndex()
 
 console.log("ok: all Model.js checks passed")
