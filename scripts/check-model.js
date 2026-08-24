@@ -145,17 +145,29 @@ function checkMalformedJson() {
 // this fix, missing `connections`/`groups` defaulted to `[]`/`{}` and the
 // document parsed as ok:true with total 0 — indistinguishable from a real
 // empty setup. It must fail closed instead.
-function checkMissingFieldsFixture() {
-  var result = Model.parseStatusDocument(readFixture("status.v1.missing-fields.json"))
+function checkVersionOnlyFixture() {
+  var result = Model.parseStatusDocument(readFixture("status.v1.version-only.json"))
 
   assert.strictEqual(result.ok, false, "a document with only \"version\" must not parse as ok")
-  assert.ok(result.degraded, "missing-fields fixture should be degraded")
+  assert.ok(result.degraded, "version-only fixture should be degraded")
   assert.strictEqual(result.degraded.kind, "schema")
   assert.strictEqual(result.total, 0)
   assert.deepStrictEqual(result.connections, [])
   assert.deepStrictEqual(result.groups, [])
 
   console.log("ok: {\"version\":1} alone is rejected (degraded.kind === \"schema\"), not shown healthy")
+}
+
+// Issue #47: `groups` present but the wrong shape (an array, or any
+// non-object) must fail closed too — this branch is otherwise unreachable
+// by the rest of the suite, which only varies `connections`.
+function checkGroupsNotObjectFixture() {
+  var result = Model.parseStatusDocument(JSON.stringify({ version: 1, connections: [], groups: "nope" }))
+
+  assert.strictEqual(result.ok, false, "groups: \"nope\" must not parse as ok")
+  assert.strictEqual(result.degraded.kind, "schema")
+
+  console.log("ok: a non-object \"groups\" is rejected")
 }
 
 // Issue #47: a Connection missing `state` must fail the whole document, not
@@ -173,8 +185,8 @@ function checkBadConnectionFixture() {
   console.log("ok: a Connection missing \"state\" is rejected (degraded.kind === \"schema\"), not defaulted")
 }
 
-// Issue #47 item 5: an id outside the CLI contract charset must be rejected,
-// not passed through to reach _targetArgs (qml/Tracker.qml).
+// Issue #47 item 5: an id outside the config.v1.md charset must be
+// rejected, not passed through to reach _targetArgs (qml/Tracker.qml).
 function checkInvalidConnectionIdCharset() {
   var doc = {
     version: 1,
@@ -188,8 +200,9 @@ function checkInvalidConnectionIdCharset() {
 
   assert.strictEqual(result.ok, false, "an id starting with '-' must be rejected")
   assert.strictEqual(result.degraded.kind, "schema")
+  assert.ok(result.degraded.message.indexOf("-leading-hyphen") !== -1, "message should name the offending id")
 
-  console.log("ok: a Connection id outside the CLI contract charset is rejected")
+  console.log("ok: a Connection id outside the config.v1.md charset is rejected")
 }
 
 // Issue #47 item 3: a port outside the contract's 1-65535 range is a wrong
@@ -212,14 +225,58 @@ function checkInvalidPortRange() {
   console.log("ok: a Connection port outside 1-65535 is rejected")
 }
 
+// Blocker 1 (rework #47): group: "" passes schemas/status.v1.json's
+// minLength 1 check nowhere else, so it must be caught here. Left
+// unrejected, every Connection sharing an empty Group would count toward
+// the bar/panel aggregates while Panel.flatRows never draws that Group's
+// rows — a healthy header over a blank body.
+function checkEmptyGroupRejected() {
+  var doc = {
+    version: 1,
+    groups: {},
+    connections: [{
+      id: "backend-dev", name: "Backend Dev", group: "", state: "stopped",
+      port: 1, address: "127.0.0.1", error: null
+    }]
+  }
+  var result = Model.parseStatusDocument(JSON.stringify(doc))
+
+  assert.strictEqual(result.ok, false, "an empty group must be rejected")
+  assert.strictEqual(result.degraded.kind, "schema")
+
+  console.log("ok: a Connection with an empty \"group\" is rejected")
+}
+
+// Blocker 1 (rework #47): address: "" is the same minLength 1 contract gap
+// as group, and renders as a bare ":<port>" address in the panel.
+function checkEmptyAddressRejected() {
+  var doc = {
+    version: 1,
+    groups: {},
+    connections: [{
+      id: "backend-dev", name: "Backend Dev", group: "g", state: "stopped",
+      port: 1, address: "", error: null
+    }]
+  }
+  var result = Model.parseStatusDocument(JSON.stringify(doc))
+
+  assert.strictEqual(result.ok, false, "an empty address must be rejected")
+  assert.strictEqual(result.degraded.kind, "schema")
+
+  console.log("ok: a Connection with an empty \"address\" is rejected")
+}
+
 checkHappyFixture()
 checkPrototypePollutingGroupNames()
 checkBadVersionFixture()
 checkEmptyFixture()
 checkMalformedJson()
-checkMissingFieldsFixture()
+checkVersionOnlyFixture()
+checkGroupsNotObjectFixture()
 checkBadConnectionFixture()
 checkInvalidConnectionIdCharset()
 checkInvalidPortRange()
+checkEmptyGroupRejected()
+checkEmptyAddressRejected()
 
 console.log("ok: all Model.js checks passed")

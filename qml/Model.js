@@ -52,14 +52,18 @@ function parseStatusDocument(text) {
   if (!Array.isArray(parsed.connections)) {
     return schemaFailure("Status document field \"connections\" must be an array.", 1)
   }
+  // Only the shape of `groups` is checked here. Its values are headers only
+  // — Model.js recomputes every counter from `connections` (groupEnabledCounts
+  // below), so a wrong count inside `groups` cannot mislead the bar or panel.
   if (!parsed.groups || typeof parsed.groups !== "object" || Array.isArray(parsed.groups)) {
     return schemaFailure("Status document field \"groups\" must be an object.", 1)
   }
 
-  var connections = parseConnections(parsed.connections)
-  if (connections === null) {
-    return schemaFailure("A connection in the Status document is missing a required field or has the wrong type.", 1)
+  var parsedConnections = parseConnections(parsed.connections)
+  if (!Array.isArray(parsedConnections)) {
+    return schemaFailure(parsedConnections.error, 1)
   }
+  var connections = parsedConnections
   // UI counts are enabled-only (issue #26). Document totals still include
   // disabled rows; consumers that need "is the list empty?" use
   // connections.length, not `total`.
@@ -102,7 +106,9 @@ function schemaFailure(message, version) {
 // stable config order), not object key order in `groups`, so panel sections
 // match DESIGN.md even if a future producer reorders the `groups` map.
 function parseGroups(rawGroups, connections) {
-  var source = rawGroups && typeof rawGroups === "object" ? rawGroups : {}
+  // No defensive fallback here: the caller (parseStatusDocument) already
+  // rejected the document unless rawGroups is a plain object.
+  var source = rawGroups
   var names = []
   // Object.create(null): group names are CLI-controlled free text (issue
   // #44) and a name matching an Object.prototype member ("constructor",
@@ -183,22 +189,33 @@ function enabledAggregates(connections) {
   }
 }
 
-// CLI contract charset for id and Group targets (cli-contract.v1.md). A
-// leading '-' or '--' would be read as a flag by argv parsing; the charset
-// starts with an alnum so that can never happen (issue #47, agrees with #49).
+// Connection id charset (cloud-sql-tracker/docs/config.v1.md "Connection
+// fields": id `^[a-zA-Z0-9][a-zA-Z0-9_-]*$`, length 1-64 — this pattern is
+// the same rule, just anchored with an explicit max length instead of `*`).
+// A leading '-' or '--' would be read as a flag by argv parsing; the
+// charset starts with an alnum so that can never happen (issue #47). Group
+// charset enforcement is #49's slice (Tracker.qml's target guard), not here.
 var CONNECTION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/
 
-// Returns the parsed Connection list, or null if any element fails the
-// contract's type/range for a field this plugin reads. A malformed
-// Connection fails the whole document (issue #47) instead of being dropped
-// or defaulted — a defaulted empty id/port/Group can otherwise reach
-// _targetArgs and read as a healthy, empty setup.
+// Returns the parsed Connection list, or { error: message } if any element
+// fails the contract's type/range for a field this plugin reads. A
+// malformed Connection fails the whole document (issue #47) instead of
+// being dropped or defaulted — a defaulted empty id/port/Group can
+// otherwise reach _targetArgs and read as a healthy, empty setup. The
+// message names the offending Connection (id when known, else its index)
+// and the field, so the Degraded body the operator sees is actionable.
 function parseConnections(rawConnections) {
   var out = []
   for (var i = 0; i < rawConnections.length; i++) {
-    var connection = parseConnection(rawConnections[i])
-    if (connection === null) return null
-    out.push(connection)
+    var raw = rawConnections[i]
+    var result = parseConnection(raw)
+    if (result.ok !== true) {
+      var ref = (raw && typeof raw === "object" && typeof raw.id === "string" && raw.id !== "")
+        ? "id " + JSON.stringify(raw.id)
+        : "index " + i
+      return { error: "Connection at " + ref + " has " + result.reason + "." }
+    }
+    out.push(result.connection)
   }
   return out
 }
@@ -208,38 +225,69 @@ function parseConnections(rawConnections) {
 // reads (instance, private_ip, source, pid, unit, port_open, uptime_sec)
 // are ignored, per the Status document "ignore unknown fields" rule.
 function parseConnection(c) {
-  if (!c || typeof c !== "object" || Array.isArray(c)) return null
-  if (typeof c.id !== "string" || !CONNECTION_ID_PATTERN.test(c.id)) return null
-  if (typeof c.name !== "string") return null
-  if (typeof c.group !== "string") return null
-  if (typeof c.state !== "string") return null
-  if (!isValidPort(c.port)) return null
-  if (typeof c.address !== "string") return null
-  if (c.enabled !== undefined && typeof c.enabled !== "boolean") return null
+  if (!c || typeof c !== "object" || Array.isArray(c)) {
+    return { ok: false, reason: "a value that is not an object" }
+  }
+  if (typeof c.id !== "string" || !CONNECTION_ID_PATTERN.test(c.id)) {
+    return { ok: false, reason: "a missing or invalid \"id\" field" }
+  }
+  if (typeof c.name !== "string") {
+    return { ok: false, reason: "a missing or invalid \"name\" field" }
+  }
+  // group and address are non-empty per contract (config.v1.md); an empty
+  // group renders as a header with no visible rows (Panel.flatRows skips
+  // it) and an empty address renders as ":<port>" — both read as broken,
+  // not merely unusual, so both fail the document rather than defaulting.
+  if (typeof c.group !== "string" || c.group.length === 0) {
+    return { ok: false, reason: "a missing or empty \"group\" field" }
+  }
+  if (typeof c.state !== "string") {
+    return { ok: false, reason: "a missing or invalid \"state\" field" }
+  }
+  if (!isValidPort(c.port)) {
+    return { ok: false, reason: "a missing or out-of-range \"port\" field" }
+  }
+  if (typeof c.address !== "string" || c.address.length === 0) {
+    return { ok: false, reason: "a missing or empty \"address\" field" }
+  }
+  if (c.enabled !== undefined && typeof c.enabled !== "boolean") {
+    return { ok: false, reason: "a non-boolean \"enabled\" field" }
+  }
   var error = parseConnectionError(c.error)
-  if (error === undefined) return null
+  if (error === undefined) {
+    return { ok: false, reason: "an invalid \"error\" field" }
+  }
 
   return {
-    id: c.id,
-    name: c.name,
-    group: c.group,
-    state: parseHealthState(c.state),
-    port: c.port,
-    address: c.address,
-    // Missing field (older CLI) → true. Only explicit false is disabled.
-    enabled: c.enabled !== false,
-    error: error
+    ok: true,
+    connection: {
+      id: c.id,
+      name: c.name,
+      group: c.group,
+      state: parseHealthState(c.state),
+      port: c.port,
+      address: c.address,
+      // Missing field (older CLI) → true. Only explicit false is disabled.
+      enabled: c.enabled === undefined ? true : c.enabled,
+      error: error
+    }
   }
 }
 
+// ES5 integer check (no Number.isInteger — this file is the only qml/ file
+// that must also run outside Quickshell, and a missing builtin would throw
+// outside parseStatusDocument's JSON.parse try/catch, freezing the widget
+// on its last view instead of degrading).
 function isValidPort(value) {
-  return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 65535
+  return typeof value === "number" && value === Math.floor(value) && value >= 1 && value <= 65535
 }
 
-// A present-but-unrecognized state is a forward-compat future enum value
-// (status-document.v1.md "additive" rule) and degrades to "error" per row,
-// not a schema failure. A state field that is not a string at all is a
-// malformed document — parseConnection rejects that before this runs.
+// state is a closed enum in v1 (status-document.v1.md); the additive rule
+// never blesses new state values. A present-but-unrecognized value is out
+// of contract, so the plugin degrades that one row to "error" rather than
+// the whole document — fails visible, keeps the pre-existing
+// KNOWN_HEALTH_STATES behavior. A state field that is not a string at all
+// is a malformed document — parseConnection rejects that before this runs.
 function parseHealthState(value) {
   return KNOWN_HEALTH_STATES.indexOf(value) !== -1 ? value : "error"
 }

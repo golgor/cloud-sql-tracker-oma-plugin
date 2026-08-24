@@ -11,7 +11,7 @@ Status document (schema v1) samples for `Model.js`, not for the CLI itself.
   an empty Status document parses as usable (`ok: true`), **not** Degraded, which
   is what lets the Panel tell "nothing configured" apart from "control plane
   broken". Also the fixture behind the Panel's empty body.
-- `status.v1.missing-fields.json` — `{"version": 1}` and nothing else. Issue
+- `status.v1.version-only.json` — `{"version": 1}` and nothing else. Issue
   #47: a document that only carries the right `version` must fail closed
   (`degraded.kind === "schema"`), not read as a healthy, empty setup.
 - `status.v1.bad-connection.json` — otherwise well-formed document where the

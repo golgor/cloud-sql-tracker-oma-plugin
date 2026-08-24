@@ -123,7 +123,7 @@ Not the same as Connection Health `error`. When `Tracker.degraded !== null`, rep
 |-----------------|-----------------|
 | `cli_missing` | Install CLI or set `cliPath` |
 | `cli_old` | Upgrade CLI / adjust `minCliVersion` |
-| `schema` | Status document `version` ≠ 1 — upgrade plugin or CLI together |
+| `schema` | Status document `version` ≠ 1, or the document does not match the contract shape (e.g. `connections` not an array, a Connection missing a required field) — upgrade plugin or CLI together, or the control plane is broken |
 | `status_failed` | Status command failed — message/stderr hint (includes **invalid config JSON** / config load errors: CLI exits 2 on `status --json`) |
 | `doctor_failed` | `doctor --json` hard-fail (`ok: false`) — setup untrustworthy (e.g. missing `proxy_bin`). Full body; **no connection list** |
 

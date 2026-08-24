@@ -142,6 +142,7 @@ Pure functions only (no QML imports, no Process):
 
 - `parseStatusDocument(text) → { ok, degraded?, running, error, total, groups, connections, cliVersion, … }`
 - Require Status document `version === 1`; ignore unknown fields (additive-safe consumer)
+- Fail closed on shape (issue #47): require `connections` array and `groups` object, and reject any Connection whose id/name/group/state/port/address/enabled/error does not match `status-document.v1.md`'s type and range. A malformed document degrades (`kind: "schema"`) instead of showing an empty or partially-defaulted view as healthy.
 - Parse `connections[].enabled` (missing → `true`). Recompute **enabled-only** `running`/`error`/`total` and per-group counters for the bar/panel; disabled rows remain in `connections` (issue #26)
 - Optional helpers (e.g. semver compare) stay pure if extracted
 
