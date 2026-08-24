@@ -157,6 +157,29 @@ exists to stop. **Unchanged:** a genuinely new settings generation (`cliPath`,
 `minCliVersion` actually changing value) still resets `_doctorOk` to `null` on
 its own and gets a fresh doctor run on the next open.
 
+**Visible consequence:** if the last open panel closes while doctor had failed
+(`degraded.kind === "doctor_failed"`), the verdict clears with it — a preflight
+verdict is scoped to the panel session it answered, not to the app's lifetime —
+so the bar's warning affordance drops within one poll, even with no CLI change
+and no reopen. The next open re-runs doctor and can show the same failure
+again if the underlying setup issue is still there.
+
+**Round 4 fixes (still round 2's semantics, tightened further):**
+- The reset above now also forces `_doctorProcGeneration = -1` when a
+  doctorProc launched for the session that just ended is still running. Its
+  settle path (`doctorTimeout` / `doctorProc.onExited`) then takes the same
+  stale-generation branch a real settings change already uses to invalidate
+  an in-flight probe, rather than writing a fresh doctor verdict for a
+  session that no longer has a panel open to show it. Both of those branches
+  already clear `_doctorWanted` unconditionally before checking the
+  generation, so this cannot reopen the wedge below.
+- The reset moved from an `if (wasOpen && !anyOpen)` check inside
+  `_recomputeViewerAggregates` to `onPanelOpenChanged: if (!panelOpen) …`
+  declared next to the rest of the doctor state. `panelOpen`'s own facade
+  binding already turns a genuine true→false transition into that signal
+  (QML dedupes a bool write that does not change the value), so this needed
+  no hand-rolled "was it open before" local to begin with.
+
 **`_doctorWanted` lifecycle (round 2 fix).** Every code path that settles
 `_doctorOk` (to `true` or `false`) must also leave `_doctorWanted` `false` —
 otherwise a later version-gate flap (CLI briefly unreachable, then found again)

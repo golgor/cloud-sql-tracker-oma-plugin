@@ -71,7 +71,9 @@ Singleton {
   // Public facades: read-only to callers, matching docs/modules.md — the
   // only writers are _recomputeViewerAggregates below (issue #54 review).
   // See DESIGN.md "Doctor-on-open" for the barVisible-gates-the-poll-timer
-  // rule this feeds (#52).
+  // rule this feeds (#52). panelOpen's own onPanelOpenChanged (near the
+  // doctor state further down) reacts to the true->false edge — the last
+  // open panel closing.
   readonly property bool panelOpen: root._anyOpen
   readonly property bool barVisible: root._anyVisible
   property bool _anyOpen: false
@@ -142,34 +144,11 @@ Singleton {
       if (v.opened === true) anyOpen = true
       if (v.barVisible !== false) anyVisible = true
     }
-    var wasOpen = root._anyOpen
     root._anyOpen = anyOpen
-    // Issue #54 round 2: closing the last open panel ends this doctor
-    // preflight "session" — reset _doctorOk so the *next* open re-runs
-    // doctor instead of reusing this session's answer forever.
-    // DESIGN.md/chrome.md/how-it-works.md/README.md all promise doctor
-    // runs once per panel OPEN, not once per app lifetime: runDoctor()'s
-    // `_doctorOk !== null` guard exists to stop a SECOND monitor's
-    // concurrent open from re-running an already-settled check, not to
-    // pin a stale pass or a transient failure (a doctorProc timeout on
-    // resume-from-sleep, a momentary exec error) for the rest of the
-    // session. Only fires on the true->false edge, not every recompute, so
-    // an already-closed bar's own churn (barVisible flapping) cannot
-    // repeatedly reset a session that never had a panel open in the first
-    // place.
-    if (wasOpen && !anyOpen) {
-      root._doctorOk = null
-      root._doctorFailMessage = ""
-      // Nobody is waiting on a deferred "run doctor once version passes"
-      // request any more -- a future open calls runDoctor() again and
-      // re-establishes it if still needed.
-      root._doctorWanted = false
-      // Only stand down if nothing is actually still running: a doctorProc
-      // already in flight settles itself (onExited / doctorTimeout), and
-      // forcing this false here would let a status poll landing before it
-      // settles show the switchboard early (_applyParsed reads this flag).
-      if (!doctorProc.running) root._doctorPending = false
-    }
+    // The doctor-session reset for "last open panel just closed" lives on
+    // onPanelOpenChanged next to the rest of the doctor state (issue #54
+    // round 4), not here — panelOpen's own facade binding already turns
+    // this plain assignment into that edge with no extra bookkeeping.
     // Issue #54 review: two different reasons for an empty list need two
     // different answers. Nobody has ever registered (startup ordering) —
     // default to visible/polling, the same fail-open rule a single missing
@@ -226,6 +205,12 @@ Singleton {
     // doctor flags above already get.
     root._statusRetryWanted = false
   }
+  // cliPath and minCliVersion are the only two settings keys that gate
+  // probing today. A future settings key that also gates probing (e.g. a
+  // new CLI flag the version/doctor check must account for) needs its own
+  // onXChanged handler here calling _onProbeInputsChanged() too — adding it
+  // anywhere else would silently exempt it from the reset this file relies
+  // on to re-probe.
   onCliPathChanged: root._onProbeInputsChanged()
   onMinCliVersionChanged: root._onProbeInputsChanged()
 
@@ -317,6 +302,53 @@ Singleton {
   // True from doctor request until _applyDoctorReport settles. Healthy Status
   // must not clear Degraded or show the switchboard while this is true.
   property bool _doctorPending: false
+
+  // Issue #54 round 2/4: closing the last open panel ends this doctor
+  // preflight "session" — reset _doctorOk so the *next* open re-runs
+  // doctor instead of reusing this session's answer forever.
+  // DESIGN.md/chrome.md/how-it-works.md/README.md all promise doctor runs
+  // once per panel OPEN, not once per app lifetime: runDoctor()'s
+  // `_doctorOk !== null` guard exists to stop a SECOND monitor's
+  // concurrent open from re-running an already-settled check, not to pin a
+  // stale pass or a transient failure (a doctorProc timeout on
+  // resume-from-sleep, a momentary exec error) for the rest of the
+  // session. onPanelOpenChanged only fires on a genuine value transition
+  // (QML dedupes a bool write that does not change the value), so this
+  // needs no hand-rolled "was it open before" local the way
+  // _recomputeViewerAggregates once did — an already-closed bar's own
+  // churn (barVisible flapping, or panelOpen never having been true) never
+  // re-triggers this.
+  onPanelOpenChanged: if (!root.panelOpen) root._endDoctorSession()
+
+  function _endDoctorSession() {
+    root._doctorOk = null
+    root._doctorFailMessage = ""
+    // Nobody is waiting on a deferred "run doctor once version passes"
+    // request any more -- a future open calls runDoctor() again and
+    // re-establishes it if still needed.
+    root._doctorWanted = false
+    if (doctorProc.running) {
+      // A doctorProc launched for the session that just ended is still
+      // running. Force its settle path onto the *existing* stale-
+      // generation branch (doctorTimeout / doctorProc.onExited) instead of
+      // letting it write a fresh verdict for a session that no longer has
+      // a panel open to show it — the same mechanism this file already
+      // uses to invalidate an in-flight probe after a real settings
+      // change (_onProbeInputsChanged bumps _settingsGeneration the same
+      // way). Both of those branches already clear _doctorWanted
+      // unconditionally before checking the generation (round 3), so this
+      // cannot re-open the _doctorWanted wedge. _doctorPending is left
+      // alone here: it is not wrong yet (a check genuinely is still
+      // running), and the stale branch it lands on clears it once the
+      // process actually settles.
+      root._doctorProcGeneration = -1
+    } else {
+      // Nothing is running -- _doctorPending being true here would already
+      // be wrong (there is no in-flight check left to explain it), so this
+      // is the one place it is safe to force it false directly.
+      root._doctorPending = false
+    }
+  }
 
   // ---- Commands (docs/modules.md "Commands") --------------------------------
 
