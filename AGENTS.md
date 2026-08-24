@@ -129,7 +129,12 @@ omarchy restart shell
 - Branch from latest `main`: `feat/…`, `fix/…`, `docs/…`, or `wayfinder/<n>-slug`.
 - Open a **Pull Request** into `main`. Link the issue (`Closes #N` when the PR
   fully resolves it).
-- **Single** review is enough for this map (no dual-bot gate).
+- **Two reviewers** check each change, not one review.
+- **chatgpt-sol** checks the spec against the frozen contracts. **Opus-5** checks
+  module seams, depth, and code style.
+- A **Sonnet-5** subagent implements the change on a git worktree. The parent
+  writes no product code.
+- Reviewers are **read-only**. A human performs the merge.
 - Prefer one logical slice per PR.
 - After merge, update the map’s **Decisions so far** in the **same session**
   when the work closes a Wayfinder ticket ([map #1](https://github.com/golgor/cloud-sql-tracker-oma-plugin/issues/1)).
