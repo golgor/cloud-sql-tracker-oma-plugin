@@ -165,12 +165,32 @@ Panel {
 
   // ---- Derived lists ------------------------------------------------------
 
-  function connectionsForGroup(name) {
-    var list = []
+  // One pass over connectionList, bucketed by Group name (issue #46).
+  // flatRows below calls connectionsForGroup once per Group on every
+  // Tracker publish; scanning the whole Connection list per Group each time
+  // costs Groups times Connections. Building this map once per
+  // connectionList change and reading it back is Connections, then O(1)
+  // per Group.
+  //
+  // Object.create(null): Group names are CLI-controlled free text (issue
+  // #44) and a name matching an Object.prototype member ("constructor",
+  // "toString", ...) must not read as an inherited key instead of a miss.
+  readonly property var connectionsByGroup: {
+    var byGroup = Object.create(null)
     for (var i = 0; i < root.connectionList.length; i++) {
-      if (root.connectionList[i].group === name) list.push(root.connectionList[i])
+      var c = root.connectionList[i]
+      if (!byGroup[c.group]) byGroup[c.group] = []
+      byGroup[c.group].push(c)
     }
-    return list
+    return byGroup
+  }
+
+  // Returns the live array backing connectionsByGroup's bucket for `name`,
+  // not a copy — the old scan returned a fresh array per call. Read it, do
+  // not push/sort/splice it: mutating it would corrupt that bucket for
+  // every other reader until the next connectionList change rebuilds the map.
+  function connectionsForGroup(name) {
+    return root.connectionsByGroup[name] || []
   }
 
   // Start targets only (#26). Stop may still include disabled (CLI no-op).

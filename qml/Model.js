@@ -53,7 +53,7 @@ function parseStatusDocument(text) {
     return schemaFailure("Status document field \"connections\" must be an array.", 1)
   }
   // Only the shape of `groups` is checked here. Its values are headers only
-  // — Model.js recomputes every counter from `connections` (groupEnabledCounts
+  // — Model.js recomputes every counter from `connections` (bucketEnabledCounts
   // below), so a wrong count inside `groups` cannot mislead the bar or panel.
   if (!parsed.groups || typeof parsed.groups !== "object" || Array.isArray(parsed.groups)) {
     return schemaFailure("Status document field \"groups\" must be an object.", 1)
@@ -140,35 +140,51 @@ function parseGroups(rawGroups, connections) {
     }
   }
 
+  // One pass over connections, not one pass per Group (issue #46): a nested
+  // scan costs Groups times Connections, and that cost lands on the
+  // process that draws the whole desktop bar. bucketEnabledCounts already
+  // computed every Group's counters in that single pass; this just reads
+  // them back in Group order.
+  var counts = bucketEnabledCounts(connections)
   return names.map(function (name) {
-    return groupEnabledCounts(name, connections)
+    return counts[name] || emptyGroupCounts(name)
   })
 }
 
-// Per-group counters over enabled members only (#26). A group that only has
-// disabled Connections still appears (total 0) so the panel can show them.
-function groupEnabledCounts(name, connections) {
-  var running = 0
-  var starting = 0
-  var error = 0
-  var stopped = 0
-  var total = 0
+// Per-group counters over enabled members only (#26), computed for every
+// Group in one pass over `connections`. A group that only has disabled
+// Connections gets no bucket here — parseGroups falls back to
+// emptyGroupCounts so it still appears (total 0).
+//
+// Object.create(null): same reason as `seen` above — a Group named
+// "constructor" or "toString" must not read as an inherited key.
+function bucketEnabledCounts(connections) {
+  var byGroup = Object.create(null)
   for (var i = 0; i < connections.length; i++) {
     var c = connections[i]
-    if (c.group !== name || !c.enabled) continue
-    total++
-    if (c.state === "running") running++
-    else if (c.state === "starting") starting++
-    else if (c.state === "error") error++
-    else stopped++
+    if (!c.enabled) continue
+    var bucket = byGroup[c.group]
+    if (!bucket) {
+      bucket = emptyGroupCounts(c.group)
+      byGroup[c.group] = bucket
+    }
+    bucket.total++
+    if (c.state === "running") bucket.running++
+    else if (c.state === "starting") bucket.starting++
+    else if (c.state === "error") bucket.error++
+    else bucket.stopped++
   }
+  return byGroup
+}
+
+function emptyGroupCounts(name) {
   return {
     name: name,
-    running: running,
-    starting: starting,
-    error: error,
-    stopped: stopped,
-    total: total
+    running: 0,
+    starting: 0,
+    error: 0,
+    stopped: 0,
+    total: 0
   }
 }
 
@@ -321,6 +337,12 @@ function parseConnectionError(raw) {
 
 if (typeof module !== "undefined") {
   module.exports = {
-    parseStatusDocument: parseStatusDocument
+    parseStatusDocument: parseStatusDocument,
+    // Exported only for scripts/check-model.js's --perf report (issue #46),
+    // which times this against a reference nested-scan implementation on
+    // the same connections. The correctness checks go through
+    // parseStatusDocument, like Tracker.qml does; this export has no other
+    // caller.
+    parseGroups: parseGroups
   }
 }
