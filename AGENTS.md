@@ -88,15 +88,19 @@ BarWidget / Panel  →  Tracker  →  Process(cloud-sql-tracker)  →  stdout
 |------|------|
 | `qml/BarWidget.qml` | Thin host: button, Loader, injectPanel |
 | `qml/Panel.qml` | Chrome Adapter: cursor, intent, displayState; **calls Tracker only** |
-| `qml/Tracker.qml` | Deep module: poll, version gate, doctor-on-open, start/stop, degraded |
+| `qml/Tracker.qml` | Deep module: poll, version gate, doctor-on-open, start/stop, degraded. One shared singleton instance (issue #54) |
 | `qml/Model.js` | Pure Status parse (no QML, no Process) |
+| `qml/qmldir` | Declares `Tracker` a singleton for this directory (issue #54) |
 | `manifest.json` | `kinds: ["bar-widget"]`; settings keys |
 
 **Hard rules**
 
 - No `Process` / argv / `Model.js` import in `BarWidget.qml` or `Panel.qml`.
 - No `toggle()` on Tracker — UI picks start vs stop from Health state.
-- One Tracker instance per bar widget (no shared shell `service` in v1).
+- One shared Tracker for every bar widget, not a shell `kind: "service"`
+  (issue #54). `panelOpen` / `barVisible` are `true` when **any** registered
+  widget says `true`; `settings` is the same object for every instance.
+  Mechanism and rationale: [`docs/modules.md`](./docs/modules.md).
 - Nested host shape: Panel registers under `hostWidget` for keyboard panel switch.
 
 Detail: [`docs/modules.md`](./docs/modules.md).

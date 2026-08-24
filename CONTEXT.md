@@ -5,7 +5,7 @@ Omarchy bar dropdown that drives the external `cloud-sql-tracker` control plane.
 ## Language
 
 **Tracker**:
-The in-shell module that polls the control plane, holds the last usable Status view, and runs start/stop. One instance per bar widget.
+The in-shell module that polls the control plane, holds the last usable Status view, and runs start/stop. One shared instance for every bar widget (issue #54) — the bar exists once per monitor, and a per-widget Tracker meant one poll loop per monitor for the same answer.
 _Avoid_: Service (collides with Omarchy `kind: service` and systemd units), client, agent, wrapper, control plane (the CLI is the control plane)
 
 **Control plane**:
@@ -35,3 +35,10 @@ _Avoid_: Error alone (reserved for Connection Health state `error`), broken, off
 **Action target**:
 What a start or stop applies to: one Connection id, one Group name, or all Connections.
 _Avoid_: Selector (CLI term unless quoting argv), query
+
+**Viewer**:
+A bar widget instance registered with the shared Tracker (`registerViewer`/
+`unregisterViewer`/`notifyViewerChanged`, issue #54) so its `opened` and `barVisible`
+feed the `panelOpen`/`barVisible` aggregate. One per monitor.
+_Avoid_: Listener, observer, subscriber (this plugin does not use a signal/slot
+observer pattern for this — Tracker re-scans registered instances directly)

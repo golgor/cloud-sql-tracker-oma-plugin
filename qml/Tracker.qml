@@ -1,4 +1,6 @@
+pragma Singleton
 import QtQuick
+import Quickshell
 import Quickshell.Io
 import "Model.js" as Model
 
@@ -8,7 +10,42 @@ import "Model.js" as Model
 // stop() — they never touch Process, argv, or Model.js directly. Contract:
 // docs/modules.md, docs/DESIGN.md, CONTEXT.md ("Tracker", "Degraded",
 // "Action target"). Issue #31: doctor_failed + row-scoped actionErrors.
-Item {
+//
+// Issue #54: one shared instance for every bar, not one per widget. A
+// three-monitor desk used to run three Trackers polling the same question —
+// the poll cost no longer grows with the monitor count. Callers get the
+// shared instance through a namespaced directory import — see
+// `import "." as Shared` / `Shared.Tracker` in BarWidget.qml — never
+// `Tracker { ... }`.
+//
+// Singleton mechanism (issue #54 review — three parts, all required):
+//   1. `pragma Singleton` above, in *this* file — the file qml/qmldir
+//      names via `singleton Tracker 1.0 Tracker.qml`. Qt requires both:
+//      qmldir alone leaves the type an ordinary creatable composite, so
+//      `Tracker { ... }` would silently build a second instance instead of
+//      erroring, and a bare `Tracker` reference falls through to whatever
+//      QML happens to resolve first.
+//   2. Root type `Singleton` (below), from `import Quickshell` — the type
+//      quickshell-mirror/quickshell's own convention uses for reloadable
+//      shell state (src/core/singleton.hpp: "All singletons should inherit
+//      from this type"). `Singleton` extends `ReloadPropagator` extends
+//      `Reloadable` extends `QObject` (src/core/reload.hpp) — not
+//      QQuickItem — so it is a plain non-visual container, the same shape
+//      as `QtObject`. Verified against that source that this is legal for
+//      this file's children: `ReloadPropagator` declares
+//      `Q_PROPERTY(QQmlListProperty<QObject> children READ data)` as its
+//      `DefaultProperty`, i.e. it accepts *any* QObject-derived child, not
+//      only visual Items — Timer, Process, and StdioCollector below are all
+//      QObject-derived, and this file already has no visual properties
+//      (anchors, width/height, visible, …) to lose by leaving `Item`.
+//   3. Callers must reach this file through a real, *named* import, not the
+//      bare same-directory implicit lookup and not even an unqualified
+//      `import "."` — see BarWidget.qml's `import "." as Shared` and its
+//      import comment for why round 2 review moved to a namespaced import.
+// Not possible to prove end to end in this container (no live Quickshell
+// or Omarchy shell here) — a multi-monitor smoke test per the issue's "How
+// to check" is a merge precondition.
+Singleton {
   id: root
 
   // ---- Config in ----------------------------------------------------------
@@ -17,26 +54,144 @@ Item {
   // minCliVersion, refreshIntervalSec, refreshIntervalOpenSec.
   property var settings: ({})
 
-  // Set by the host widget/panel to switch poll cadence. See DESIGN.md
-  // "Poll: slower when closed, faster when open".
-  property bool panelOpen: false
+  // Selects poll cadence (DESIGN.md "Poll: slower when closed, faster when
+  // open") and gates pollTimer on the shell's barHidden state (issue #52).
+  // With one shared Tracker and one bar widget per monitor (issue #54),
+  // neither can be a plain externally-set property any more — two bars
+  // disagreeing about "open" or "visible" would just have the
+  // last-evaluated binding win, not an answer. The rule instead is "true
+  // when ANY registered bar says true": panelOpen follows whichever
+  // monitor's panel is actually open, and the poll only fully stops when
+  // every bar is hidden. Each bar widget registers itself once
+  // (registerViewer/unregisterViewer) and calls notifyViewerChanged()
+  // whenever its own `opened` or `barVisible` changes; the aggregate below
+  // is always recomputed from the registered instances themselves, so a
+  // missed *notify* call cannot leave it stuck (a missed *unregister* is a
+  // different failure — see notifyViewerChanged below).
+  // Public facades: read-only to callers, matching docs/modules.md — the
+  // only writers are _recomputeViewerAggregates below (issue #54 review).
+  // See DESIGN.md "Doctor-on-open" for the barVisible-gates-the-poll-timer
+  // rule this feeds (#52). panelOpen's own onPanelOpenChanged (near the
+  // doctor state further down) reacts to the true->false edge — the last
+  // open panel closing.
+  readonly property bool panelOpen: root._anyOpen
+  readonly property bool barVisible: root._anyVisible
+  property bool _anyOpen: false
+  property bool _anyVisible: true
 
-  // Set by BarWidget from the shell's barHidden state (issue #52); see
-  // DESIGN.md "Doctor-on-open" for the gate this feeds. Host sets false
-  // only when it has no reader for the count; default true polls.
-  property bool barVisible: true
+  // Registered bar widget instances (BarWidget.qml objects), compared by
+  // identity — a plain array of object references, not a map, so there are
+  // no string keys and no Object.prototype collision to guard against (the
+  // Object.create(null) maps elsewhere in this file are for CLI-controlled
+  // string ids, a different problem).
+  property var _viewers: []
+
+  // Issue #54 review: an empty _viewers array means "nobody has ever
+  // registered yet" (fail open, see _recomputeViewerAggregates) right up
+  // until it means "every bar widget is gone" (fail closed) — this flag is
+  // the difference. Set once, on the first registration, and never cleared:
+  // a plugin that has run at least one bar widget this session does not go
+  // back to "unknown".
+  property bool _everRegistered: false
+
+  function _viewerIndex(instance) {
+    for (var i = 0; i < root._viewers.length; i++) {
+      if (root._viewers[i] === instance) return i
+    }
+    return -1
+  }
+
+  // Called once by each bar widget on creation. Recomputes the aggregate
+  // right away so a widget that registers already open/visible does not
+  // wait for a later change to be counted.
+  function registerViewer(instance) {
+    if (!instance || root._viewerIndex(instance) !== -1) return
+    root._everRegistered = true
+    root._viewers = root._viewers.concat([instance])
+    root._recomputeViewerAggregates()
+  }
+
+  // Called on bar widget destruction (screen unplugged, shell rescan, …) so
+  // a gone widget cannot hold panelOpen/barVisible open forever.
+  function unregisterViewer(instance) {
+    var idx = root._viewerIndex(instance)
+    if (idx === -1) return
+    var next = root._viewers.slice()
+    next.splice(idx, 1)
+    root._viewers = next
+    root._recomputeViewerAggregates()
+  }
+
+  // Called by a registered widget whenever its own `opened` or
+  // `barVisible` changes. Reads the instance's current state fresh instead
+  // of taking it as an argument, so the aggregate re-scans the registered
+  // instances' own truth rather than accumulating a delta that a missed
+  // *notify* call could leave stale. This does not cover a missed
+  // *unregister*: a widget destroyed without Component.onDestruction firing
+  // stays counted (and reading its properties may itself throw — see
+  // Component.onDestruction below), same as any QML object whose teardown
+  // signal never fires.
+  function notifyViewerChanged(instance) {
+    if (root._viewerIndex(instance) === -1) return
+    root._recomputeViewerAggregates()
+  }
+
+  function _recomputeViewerAggregates() {
+    var anyOpen = false
+    var anyVisible = false
+    for (var i = 0; i < root._viewers.length; i++) {
+      var v = root._viewers[i]
+      if (v.opened === true) anyOpen = true
+      if (v.barVisible !== false) anyVisible = true
+    }
+    root._anyOpen = anyOpen
+    // The doctor-session reset for "last open panel just closed" lives on
+    // onPanelOpenChanged next to the rest of the doctor state (issue #54
+    // round 4), not here — panelOpen's own facade binding already turns
+    // this plain assignment into that edge with no extra bookkeeping.
+    // Issue #54 review: two different reasons for an empty list need two
+    // different answers. Nobody has ever registered (startup ordering) —
+    // default to visible/polling, the same fail-open rule a single missing
+    // barVisible reading already used (#52). Every widget that once existed
+    // is now gone (plugin disabled on rescan, every screen unplugged) —
+    // fail closed instead, or an orphaned singleton polls the CLI forever
+    // with no reader for the count. registerViewer recomputes immediately
+    // on the next widget's arrival, so this does not delay that widget's
+    // first poll.
+    root._anyVisible = !root._everRegistered ? true : anyVisible
+  }
 
   readonly property string cliPath: _stringSetting("cliPath", "cloud-sql-tracker")
   readonly property string minCliVersion: _stringSetting("minCliVersion", "0.1.0")
   readonly property int refreshIntervalSec: _intSetting("refreshIntervalSec", 5, 2, 60)
   readonly property int refreshIntervalOpenSec: _intSetting("refreshIntervalOpenSec", 2, 1, 30)
 
-  // A settings change may repoint cliPath or tighten minCliVersion — recheck
-  // the version gate on the next refresh() instead of trusting a stale pass.
-  // Also bumps _settingsGeneration so a versionProc already in flight against
-  // the *old* cliPath/minCliVersion cannot validate the *new* settings when
-  // it exits — see _checkVersion() and versionProc's handlers below.
-  onSettingsChanged: {
+  // Issue #54 round 2: this used to be onSettingsChanged, firing the reset
+  // below on every *reassignment* of the settings object -- but with N bar
+  // widgets each writing `Shared.Tracker.settings = root.settings` (settings is
+  // the same object for every instance, so every widget's write is
+  // normally a no-op value), that fired once per widget for a single real
+  // change, and once per widget on every widget's own onCompleted/settings
+  // rebind even when nothing changed. A reference-identity guard on the
+  // write side was tried and discarded (see BarWidget.qml) because it can
+  // be wrong in both directions depending on how the shell hands out
+  // settings objects.
+  //
+  // Pick: gate on cliPath/minCliVersion actually changing *value*, not on
+  // settings being reassigned. These are already `readonly property
+  // string`, so QML's own change notification is content-based (string
+  // equality), not reference-based like the `var settings` it derives
+  // from -- two reassignments that resolve to the same effective cliPath
+  // (same string, whatever object or key shape produced it) already do not
+  // re-fire onCliPathChanged/onMinCliVersionChanged, with no extra
+  // bookkeeping needed here. Why: this is the exact "did the raw values
+  // that gate probing actually change" question, answered by the value
+  // types QML already tracks for us, comparing the *effective* (post
+  // fallback) value rather than a raw last-seen cache that would need to
+  // be kept in sync by hand. refreshIntervalSec/refreshIntervalOpenSec need
+  // no such guard -- they are read reactively on every poll, nothing caches
+  // them.
+  function _onProbeInputsChanged() {
     _versionOk = false
     _settingsGeneration++
     // Next panel open should re-run doctor against the new cliPath.
@@ -50,6 +205,14 @@ Item {
     // doctor flags above already get.
     root._statusRetryWanted = false
   }
+  // cliPath and minCliVersion are the only two settings keys that gate
+  // probing today. A future settings key that also gates probing (e.g. a
+  // new CLI flag the version/doctor check must account for) needs its own
+  // onXChanged handler here calling _onProbeInputsChanged() too — adding it
+  // anywhere else would silently exempt it from the reset this file relies
+  // on to re-probe.
+  onCliPathChanged: root._onProbeInputsChanged()
+  onMinCliVersionChanged: root._onProbeInputsChanged()
 
   // ---- View out (docs/modules.md "Tracker interface") ----------------------
 
@@ -140,6 +303,53 @@ Item {
   // must not clear Degraded or show the switchboard while this is true.
   property bool _doctorPending: false
 
+  // Issue #54 round 2/4: closing the last open panel ends this doctor
+  // preflight "session" — reset _doctorOk so the *next* open re-runs
+  // doctor instead of reusing this session's answer forever.
+  // DESIGN.md/chrome.md/how-it-works.md/README.md all promise doctor runs
+  // once per panel OPEN, not once per app lifetime: runDoctor()'s
+  // `_doctorOk !== null` guard exists to stop a SECOND monitor's
+  // concurrent open from re-running an already-settled check, not to pin a
+  // stale pass or a transient failure (a doctorProc timeout on
+  // resume-from-sleep, a momentary exec error) for the rest of the
+  // session. onPanelOpenChanged only fires on a genuine value transition
+  // (QML dedupes a bool write that does not change the value), so this
+  // needs no hand-rolled "was it open before" local the way
+  // _recomputeViewerAggregates once did — an already-closed bar's own
+  // churn (barVisible flapping, or panelOpen never having been true) never
+  // re-triggers this.
+  onPanelOpenChanged: if (!root.panelOpen) root._endDoctorSession()
+
+  function _endDoctorSession() {
+    root._doctorOk = null
+    root._doctorFailMessage = ""
+    // Nobody is waiting on a deferred "run doctor once version passes"
+    // request any more -- a future open calls runDoctor() again and
+    // re-establishes it if still needed.
+    root._doctorWanted = false
+    if (doctorProc.running) {
+      // A doctorProc launched for the session that just ended is still
+      // running. Force its settle path onto the *existing* stale-
+      // generation branch (doctorTimeout / doctorProc.onExited) instead of
+      // letting it write a fresh verdict for a session that no longer has
+      // a panel open to show it — the same mechanism this file already
+      // uses to invalidate an in-flight probe after a real settings
+      // change (_onProbeInputsChanged bumps _settingsGeneration the same
+      // way). Both of those branches already clear _doctorWanted
+      // unconditionally before checking the generation (round 3), so this
+      // cannot re-open the _doctorWanted wedge. _doctorPending is left
+      // alone here: it is not wrong yet (a check genuinely is still
+      // running), and the stale branch it lands on clears it once the
+      // process actually settles.
+      root._doctorProcGeneration = -1
+    } else {
+      // Nothing is running -- _doctorPending being true here would already
+      // be wrong (there is no in-flight check left to explain it), so this
+      // is the one place it is safe to force it false directly.
+      root._doctorPending = false
+    }
+  }
+
   // ---- Commands (docs/modules.md "Commands") --------------------------------
 
   // Run a status poll now (and the version gate first, when it has not
@@ -155,7 +365,39 @@ Item {
 
   // One-shot setup preflight. Panel calls this on open in addition to
   // refresh(). Not on the status poll timer. Requires version gate pass.
+  //
+  // Issue #54: more than one Panel can call this now — one per monitor, all
+  // sharing this Tracker. Two different calls both reach this guard and
+  // must be told apart: a SECOND monitor's panel opening while a FIRST
+  // monitor's panel is already open (and doctor has already settled for
+  // it) must be a no-op — degraded is shared too, so without this guard a
+  // second call re-flips the already-open panel's view to "Checking
+  // setup…" (_setDegraded below writes the one shared property) and
+  // relaunches doctor for a question already answered. A FRESH open — every
+  // panel closed, then one reopens — must NOT be a no-op: DESIGN.md,
+  // chrome.md, how-it-works.md, and README.md all promise doctor runs once
+  // per panel *open*, and a settled result that outlives every panel
+  // closing (a doctorProc timeout on resume-from-sleep, a momentary exec
+  // failure) must not pin `doctor_failed` for the rest of the session.
+  //
+  // Pick: `_doctorOk !== null` here only suppresses a *concurrent*
+  // duplicate open — _recomputeViewerAggregates() resets `_doctorOk` back
+  // to null the moment the aggregate `panelOpen` transitions true->false
+  // (every panel closed), so this guard's null check is false again by the
+  // time any panel next opens, and that reopen runs a fresh doctor check.
+  // Why: this keeps the guard doing exactly the one job the issue asked for
+  // (stop a second monitor's open from redoing an in-progress or
+  // just-settled answer) without also making a settled result outlive the
+  // session that asked for it. Discarded: suppress forever until a settings
+  // change (round 2's initial fix) — a failed doctor became terminal for
+  // the whole session, silently contradicting all four "once per open"
+  // docs. Discarded: retry a failed doctor on every reopen regardless of
+  // whether another panel is still open — that is exactly the redundant
+  // relaunch-and-clobber this guard exists to stop. Unchanged: a genuinely
+  // new settings generation (cliPath, minCliVersion) still resets
+  // `_doctorOk` to null on its own and gets a fresh run on the next open.
   function runDoctor() {
+    if (root._doctorOk !== null) return
     // Hide the switchboard until doctor settles (even before Process starts).
     root._doctorPending = true
     if (root.degraded === null || root.degraded.kind === "doctor_failed")
@@ -550,7 +792,8 @@ Item {
   property bool _actionStdoutFresh: false
   property bool _actionStderrFresh: false
 
-  // Bumped by onSettingsChanged. _versionProcGeneration captures the value
+  // Bumped by _onProbeInputsChanged (cliPath/minCliVersion actually
+  // changing value). _versionProcGeneration captures the value
   // at the moment a versionProc launch is kicked off, so its exit handlers
   // can tell a stale in-flight probe (started against a cliPath/
   // minCliVersion that settings has since replaced) from a current one, and
@@ -788,6 +1031,12 @@ Item {
         doctorProc.signal(9)   // SIGKILL: see versionTimeout
         doctorProc.running = false
         root._doctorPending = false
+        // Issue #54 round 2: clear unconditionally, before the generation
+        // check below -- every path that settles _doctorOk must also leave
+        // _doctorWanted false, or a later version-gate flap can find
+        // _doctorWanted stranded true and re-launch doctor (re-pinning
+        // "Checking setup…") for a check this generation already failed.
+        root._doctorWanted = false
         if (root._doctorProcGeneration !== root._settingsGeneration) return
         root._doctorOk = false
         root._doctorFailMessage = "'doctor --json' timed out after 5s."
@@ -908,7 +1157,15 @@ Item {
       // Doctor requested on panel open often races the version probe: runDoctor
       // sets _doctorWanted / _doctorPending while !_versionOk. Start doctor now
       // if the panel is open or a gated request is still pending.
-      if (root.panelOpen || root._doctorWanted || root._doctorPending) {
+      //
+      // `_doctorOk === null` guard (issue #54): this path bypasses
+      // runDoctor()'s own settled-generation guard, so without it a
+      // transient version blip (CLI briefly unreachable, then found again)
+      // would re-run an already-settled doctor and re-flip every open
+      // panel's shared degraded view to "Checking setup…" for no reason —
+      // the version gate flapping is not a reason to redo a preflight this
+      // generation already answered.
+      if ((root.panelOpen || root._doctorWanted || root._doctorPending) && root._doctorOk === null) {
         root._doctorWanted = false
         root._checkDoctor()
       }
@@ -1071,6 +1328,10 @@ Item {
         // at most once per poll (#41 followup).
         gc()
         root._doctorPending = false
+        // Issue #54 round 2: same lifecycle rule as doctorTimeout above —
+        // every path that settles _doctorOk must also leave _doctorWanted
+        // false.
+        root._doctorWanted = false
         root._doctorOk = false
         root._doctorFailMessage = overflowMsg
         root._setDegraded("doctor_failed", overflowMsg)
