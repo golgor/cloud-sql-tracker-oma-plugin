@@ -416,6 +416,16 @@ Item {
   property bool _actionExited: true
   property bool _doctorExited: true
 
+  // Set by a timeout handler right before running = false, cleared at the
+  // top of the matching onExited. onExited still fires after running is
+  // set false — SIGTERM delivery is async, and Quickshell reports it as a
+  // normal exit (exitCode=15, CrashExit) — so without this flag the timeout
+  // handler's own cleanup above runs a second time on top of it.
+  property bool _versionTimedOut: false
+  property bool _statusTimedOut: false
+  property bool _actionTimedOut: false
+  property bool _doctorTimedOut: false
+
   // Bumped by onSettingsChanged. _versionProcGeneration captures the value
   // at the moment a versionProc launch is kicked off, so its exit handlers
   // can tell a stale in-flight probe (started against a cliPath/
@@ -557,9 +567,14 @@ Item {
     repeat: false
     onTriggered: {
       if (versionProc.running) {
-        console.warn("Tracker: versionProc timed out after 3s, killing process")
-        versionProc.kill()
+        console.warn("Tracker: versionProc timed out after 3s, terminating process")
+        // Order matters: flip the guards before running = false so
+        // onRunningChanged's "process never started" branch (fires
+        // synchronously below) sees this as already handled instead of
+        // overwriting this degraded message with the generic cli_missing one.
+        root._versionTimedOut = true
         root._versionExited = true
+        versionProc.running = false
         root.loaded = true
         root._doctorWanted = false
         root._doctorPending = false
@@ -574,9 +589,10 @@ Item {
     repeat: false
     onTriggered: {
       if (statusProc.running) {
-        console.warn("Tracker: statusProc timed out after 3s, killing process")
-        statusProc.kill()
+        console.warn("Tracker: statusProc timed out after 3s, terminating process")
+        root._statusTimedOut = true
         root._statusExited = true
+        statusProc.running = false
         root.loaded = true
         root._applyParsed({
           ok: false,
@@ -595,9 +611,10 @@ Item {
     repeat: false
     onTriggered: {
       if (doctorProc.running) {
-        console.warn("Tracker: doctorProc timed out after 5s, killing process")
-        doctorProc.kill()
+        console.warn("Tracker: doctorProc timed out after 5s, terminating process")
+        root._doctorTimedOut = true
         root._doctorExited = true
+        doctorProc.running = false
         root._doctorPending = false
         root._doctorOk = false
         root._doctorFailMessage = "'doctor --json' timed out after 5s."
@@ -612,9 +629,10 @@ Item {
     repeat: false
     onTriggered: {
       if (actionProc.running) {
-        console.warn("Tracker: actionProc timed out after 15s, killing process")
-        actionProc.kill()
+        console.warn("Tracker: actionProc timed out after 15s, terminating process")
+        root._actionTimedOut = true
         root._actionExited = true
+        actionProc.running = false
         root.busyKey = ""
         root._actionEpoch++
         var verb = root._pendingActionVerb !== "" ? root._pendingActionVerb : "action"
@@ -642,6 +660,10 @@ Item {
     stdout: StdioCollector { id: versionStdout; waitForEnd: true }
     stderr: StdioCollector { id: versionStderr; waitForEnd: true }
     onExited: function (exitCode) {
+      // The timeout above already called running = false and ran its own
+      // cleanup. onExited still fires afterward (SIGTERM delivery is async)
+      // — do not let that stale exit re-run this path on top of it.
+      if (root._versionTimedOut) { root._versionTimedOut = false; return }
       versionTimeout.stop()
       root._versionExited = true
       if (root._versionProcGeneration !== root._settingsGeneration) {
@@ -697,6 +719,9 @@ Item {
     stdout: StdioCollector { id: statusStdout; waitForEnd: true }
     stderr: StdioCollector { id: statusStderr; waitForEnd: true }
     onExited: function (exitCode) {
+      // Timeout above already called running = false and ran its own
+      // cleanup; onExited still fires after that (SIGTERM is async) — ignore it.
+      if (root._statusTimedOut) { root._statusTimedOut = false; return }
       statusTimeout.stop()
       root._statusExited = true
       if (exitCode !== 0) {
@@ -738,6 +763,9 @@ Item {
     stdout: StdioCollector { id: doctorStdout; waitForEnd: true }
     stderr: StdioCollector { id: doctorStderr; waitForEnd: true }
     onExited: function (exitCode) {
+      // Timeout above already called running = false and ran its own
+      // cleanup; onExited still fires after that (SIGTERM is async) — ignore it.
+      if (root._doctorTimedOut) { root._doctorTimedOut = false; return }
       doctorTimeout.stop()
       root._doctorExited = true
       if (root._doctorProcGeneration !== root._settingsGeneration) {
@@ -771,6 +799,12 @@ Item {
     stdout: StdioCollector { id: actionStdout; waitForEnd: true }
     stderr: StdioCollector { id: actionStderr; waitForEnd: true }
     onExited: function (exitCode) {
+      // Timeout above already called running = false and ran its own
+      // cleanup (busyKey, _actionEpoch, actionErrors). onExited still fires
+      // after that (SIGTERM is async) — without this guard it double-bumps
+      // _actionEpoch and overwrites the timeout message with "exited with
+      // code 15".
+      if (root._actionTimedOut) { root._actionTimedOut = false; return }
       actionTimeout.stop()
       root._actionExited = true
       root.busyKey = ""
