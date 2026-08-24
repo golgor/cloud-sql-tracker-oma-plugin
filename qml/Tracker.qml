@@ -161,11 +161,7 @@ Singleton {
     root._anyVisible = !root._everRegistered ? true : anyVisible
   }
 
-  // Trimmed at the source (issue #50 review): otherwise a leading-space typo
-  // failed the shape check below while the same mistake with a trailing
-  // space passed it and then failed at launch as a missing binary — two
-  // different Degraded messages for the same kind of mistake.
-  readonly property string cliPath: _stringSetting("cliPath", "cloud-sql-tracker").trim()
+  readonly property string cliPath: _stringSetting("cliPath", "cloud-sql-tracker")
   readonly property string minCliVersion: _stringSetting("minCliVersion", "0.1.0")
 
   // manifest.json default. Used both as the version-gate fallback and the
@@ -459,9 +455,20 @@ Singleton {
 
   // ---- Internal: settings helpers -------------------------------------------
 
+  // Trimmed before the empty check (issue #50 review): a whitespace-only
+  // value must fall back to the manifest default like an actually-empty one,
+  // not survive as a bare string of spaces. Applies to every string setting
+  // — cliPath and minCliVersion both go through this — so a leading- or
+  // trailing-space typo of the same value now behaves the same way, instead
+  // of one being shape-refused and the other reaching a "missing CLI"
+  // launch attempt. Trade-off, accepted: an absolute path with a genuine
+  // trailing space (unusual on Linux, not impossible) is unreachable
+  // through this setting.
   function _stringSetting(name, fallback) {
     var value = settings ? settings[name] : undefined
-    return (value === undefined || value === null || value === "") ? fallback : String(value)
+    if (value === undefined || value === null) return fallback
+    var trimmed = String(value).trim()
+    return trimmed === "" ? fallback : trimmed
   }
 
   function _intSetting(name, fallback, min, max) {
@@ -490,6 +497,8 @@ Singleton {
   // fires on any content-based change to cliPath or minCliVersion — so this
   // also re-checks (and, via the memory below, does not re-warn) on a
   // cliPath-only change that leaves an already-bad minCliVersion untouched.
+  // `root.minCliVersion` is already trimmed by _stringSetting above; no
+  // further trim needed here.
   property var _minCliVersionLastWarnedRaw: null
 
   function _maybeWarnMinCliVersionShape() {
@@ -507,21 +516,41 @@ Singleton {
   // name with no directory component, resolved on PATH. A value carrying a
   // '/' that does not start at root (e.g. "./tracker", "sub/dir/tracker")
   // would run a binary relative to the working directory of the shell
-  // process instead — issue #50. `value` is assumed already trimmed (the
-  // `cliPath` property above does this). Returns null when the shape is
-  // fine, or a message naming the problem.
+  // process instead — issue #50. `value` is assumed already trimmed (it
+  // comes from the `cliPath` property, which goes through _stringSetting).
+  // Returns null when the shape is fine, or a message naming the problem.
   //
   // The message is prefixed "Setting error: " (issue #50 review): every
-  // Degraded state this plugin otherwise reports is a control-plane problem,
+  // other Degraded state this plugin reports is a control-plane problem,
   // and chrome.md's cli_missing title is "cloud-sql-tracker not found" — a
-  // false headline sitting over a setting mistake without that prefix. The
-  // echoed value is capped so an oversized setting cannot blow up the
-  // tooltip the way an unbounded CLI output could before the #41 byte guard.
+  // false headline sitting over a setting mistake without that prefix.
+  // Quoted with single quotes, like every other operator-facing string in
+  // this file. The echoed value is capped so an oversized setting cannot
+  // blow up the tooltip the way an unbounded CLI output could before the
+  // #41 byte guard.
   function _cliPathShapeError(value) {
     if (value.length > 4096) return "Setting error: cliPath is longer than 4096 characters."
     if (value.charAt(0) === "/" || value.indexOf("/") === -1) return null
     var shown = value.length > 128 ? value.substring(0, 128) + "…" : value
-    return "Setting error: cliPath \"" + shown + "\" must be an absolute path or a bare command name (no \"/\")."
+    return "Setting error: cliPath '" + shown + "' is a relative path. Use an absolute path or a bare command name."
+  }
+
+  // Shared launch-site guard (issue #50 review): every function that builds
+  // a Process.command from root.cliPath — _checkVersion, _checkStatus,
+  // _checkDoctor, _runAction — calls this first and returns immediately
+  // when it reports true. Centralizing both the check and its side effects
+  // here, not just the check, means a shape-invalid cliPath can never reach
+  // execvp through any of the four, present or future, without each call
+  // site having to remember what settling on Degraded requires.
+  function _bailOnCliPathShape() {
+    var cliPathError = root._cliPathShapeError(root.cliPath)
+    if (cliPathError === null) return false
+    root.loaded = true
+    root._versionOk = false
+    root._doctorWanted = false
+    root._doctorPending = false
+    root._setDegraded("cli_missing", cliPathError)
+    return true
   }
 
   // ---- Internal: version gate ------------------------------------------------
@@ -722,21 +751,7 @@ Singleton {
 
   function _checkVersion() {
     if (versionProc.running) return
-    // cliPath shape is checked at the top of every launch function that
-    // reads it (issue #50 review) — not only here — so no caller, present or
-    // future, can slip a shape-invalid path past the guard. This one covers
-    // refresh() and runDoctor(), which both route through _checkVersion()
-    // first; _checkStatus() below carries its own copy for the retry path
-    // that calls it without going through here (see _retryStatusIfWanted()).
-    var cliPathError = root._cliPathShapeError(root.cliPath)
-    if (cliPathError !== null) {
-      root.loaded = true
-      root._versionOk = false
-      root._doctorWanted = false
-      root._doctorPending = false
-      root._setDegraded("cli_missing", cliPathError)
-      return
-    }
+    if (root._bailOnCliPathShape()) return
     _versionExited = false
     root._versionOverflow = ""
     root._versionStdoutFresh = false
@@ -748,21 +763,13 @@ Singleton {
   }
 
   function _checkStatus() {
-    // Same shape guard as _checkVersion() (issue #50 review). Without a copy
-    // here, _retryStatusIfWanted() calls this unconditionally from
-    // statusProc's own exit handlers, gated by neither _versionOk nor a
+    // Guard needed here specifically (not just at _checkVersion()):
+    // _retryStatusIfWanted() calls this unconditionally (via Qt.callLater)
+    // from statusProc's onRunningChanged, gated by neither _versionOk nor a
     // shape check — a settings edit landing mid-poll could otherwise launch
-    // ["<shape-invalid cliPath>", "status", "--json"], and a stray healthy
-    // document from whatever that path resolves to would clear Degraded
-    // until the next tick. Checking here, at the one place that ever builds
-    // statusProc.command, holds for every caller instead of every call site.
-    var cliPathError = root._cliPathShapeError(root.cliPath)
-    if (cliPathError !== null) {
-      root.loaded = true
-      root._versionOk = false
-      root._setDegraded("cli_missing", cliPathError)
-      return
-    }
+    // a shape-invalid cliPath, and a stray healthy document from whatever
+    // that path resolves to would clear Degraded until the next tick.
+    if (root._bailOnCliPathShape()) return
     // A poll asked for while one is in flight is *retried*, never dropped.
     // delayedRefresh is the only guaranteed post-action read, and silently
     // losing it left the panel on pre-action truth until the next tick.
@@ -783,6 +790,7 @@ Singleton {
 
   function _checkDoctor() {
     if (doctorProc.running) return
+    if (root._bailOnCliPathShape()) return
     root._doctorPending = true
     if (root.degraded === null || root.degraded.kind === "doctor_failed")
       root._setDegraded("doctor_failed", "Checking setup…")
@@ -798,6 +806,13 @@ Singleton {
 
   function _runAction(verb, target) {
     if (actionProc.running) return
+    if (root._bailOnCliPathShape()) {
+      // Refused, not launched — still advance actionEpoch so a caller
+      // holding optimistic state for this action can let go (see
+      // "Document provenance" above _actionEpoch's declaration).
+      root._actionEpoch++
+      return
+    }
     if (!root._versionOk) {
       var gateMsg = "Cannot " + verb + " — version gate has not passed" +
         (root.degraded ? (" (" + root.degraded.kind + ").") : ".")
