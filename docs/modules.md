@@ -96,6 +96,7 @@ When `degraded !== null`, UI must not present a healthy empty switchboard as suc
 | Bad `proxy_bin` / doctor hard-fail | `doctor --json` `ok: false` | `degraded.kind === "doctor_failed"` — **no connection list** |
 | Start fails after doctor passed (per Connection) | `start` non-zero | `actionErrors[id]` — row paints error; no global banner |
 | Single-id start refused (disabled, …) | exit **2** | `actionErrors[id]` (and no sticky start intent once settled) |
+| Hyphen-leading id/Group target (#49) | **no process launched** | `actionErrors[id]` — plugin-side refusal, no exit code |
 
 #### Document provenance
 

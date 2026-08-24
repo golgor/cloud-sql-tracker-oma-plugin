@@ -125,8 +125,8 @@ The plugin **only** shells out to:
 cloud-sql-tracker --version
 cloud-sql-tracker status --json
 cloud-sql-tracker doctor --json   # once when the panel opens
-cloud-sql-tracker start <id|--group G|--all>
-cloud-sql-tracker stop  <id|--group G|--all>
+cloud-sql-tracker start <id|--group=G|--group G|--all>
+cloud-sql-tracker stop  <id|--group=G|--group G|--all>
 ```
 
 It does **not** read or write the connections config file. Doctor hard-fail

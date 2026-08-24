@@ -315,9 +315,9 @@ Item {
   function _hyphenRefusalMessage(verb, target) {
     if (!target) return null
     if (target.kind === "id" && target.id && root._isHyphenLeading(target.id))
-      return "Cannot " + verb + ": the Connection id starts with '-'."
+      return "Cannot " + verb + " — the Connection id starts with '-'."
     if (target.kind === "group" && target.group && root._isHyphenLeading(target.group))
-      return "Cannot " + verb + ": the Group name starts with '-'."
+      return "Cannot " + verb + " — the Group name starts with '-'."
     return null
   }
 
@@ -456,6 +456,9 @@ Item {
             exitCode: -1
           })
         }
+        // Same terminal-outcome contract as timeout/overflow/non-zero-exit:
+        // a settled actionErrors write must not wait for the next poll tick.
+        delayedRefresh.restart()
       } else {
         console.warn("Tracker: invalid action target for " + verb + ":", JSON.stringify(target))
       }
