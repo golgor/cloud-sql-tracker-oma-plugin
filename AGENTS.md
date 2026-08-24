@@ -88,24 +88,19 @@ BarWidget / Panel  →  Tracker  →  Process(cloud-sql-tracker)  →  stdout
 |------|------|
 | `qml/BarWidget.qml` | Thin host: button, Loader, injectPanel |
 | `qml/Panel.qml` | Chrome Adapter: cursor, intent, displayState; **calls Tracker only** |
-| `qml/Tracker.qml` | Deep module: poll, version gate, doctor-on-open, start/stop, degraded |
+| `qml/Tracker.qml` | Deep module: poll, version gate, doctor-on-open, start/stop, degraded. One shared singleton instance (issue #54) |
 | `qml/Model.js` | Pure Status parse (no QML, no Process) |
+| `qml/qmldir` | Declares `Tracker` a singleton for this directory (issue #54) |
 | `manifest.json` | `kinds: ["bar-widget"]`; settings keys |
 
 **Hard rules**
 
 - No `Process` / argv / `Model.js` import in `BarWidget.qml` or `Panel.qml`.
 - No `toggle()` on Tracker — UI picks start vs stop from Health state.
-- One shared Tracker instance for every bar widget (issue #54; not a shell
-  `kind: "service"`). The bar exists once per monitor (`Bar.qml`'s
-  `Variants { model: Quickshell.screens }`), so a per-widget Tracker meant
-  one poll loop per monitor for the same question. The plugin's own
-  `qml/qmldir` declares `Tracker` a singleton; widgets reference the bare
-  `Tracker` identifier and never write `Tracker { ... }`. `panelOpen` /
-  `barVisible` are aggregated across every registered widget ("true when
-  ANY bar says true"); `settings` is the same object for every instance
-  (`allowMultiple: false`, one config for the plugin) so there is no
-  conflict to resolve there.
+- One shared Tracker for every bar widget, not a shell `kind: "service"`
+  (issue #54). `panelOpen` / `barVisible` are `true` when **any** registered
+  widget says `true`; `settings` is the same object for every instance.
+  Mechanism and rationale: [`docs/modules.md`](./docs/modules.md).
 - Nested host shape: Panel registers under `hostWidget` for keyboard panel switch.
 
 Detail: [`docs/modules.md`](./docs/modules.md).

@@ -55,9 +55,10 @@ The CLI is the **control plane**. The plugin is a **client** of that CLI.
 | Path | Role |
 |------|------|
 | `manifest.json` | Plugin id, bar-widget entry, settings (`cliPath`, intervals, `minCliVersion`) |
-| `qml/BarWidget.qml` | Host widget: button, `Tracker` child, `Loader` → Panel |
+| `qml/BarWidget.qml` | Host widget: button, `Loader` → Panel, registers with the shared `Tracker` singleton (issue #54) |
 | `qml/Panel.qml` | Grouped list chrome: cursor, intent, disabled rows, group actions |
-| `qml/Tracker.qml` | Poll, version gate, doctor-on-open, degraded, one action Process at a time |
+| `qml/Tracker.qml` | Poll, version gate, doctor-on-open, degraded, one action Process at a time — one shared instance for every bar widget (issue #54) |
+| `qml/qmldir` | Declares `Tracker` a singleton for this directory (issue #54) |
 | `qml/Model.js` | `parseStatusDocument` — Status → plain objects |
 | `scripts/dev-link` | Symlink this checkout into Omarchy’s plugin dir |
 | `scripts/check-model.js` | Node smoke tests for Model.js + fixtures |

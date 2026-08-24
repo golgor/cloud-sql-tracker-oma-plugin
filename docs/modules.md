@@ -53,14 +53,18 @@ interface is Status parsing only.
 ### Wiring
 
 ```
-Tracker                  ← ONE shared instance (qml/qmldir singleton, issue #54)
-   ▲   ▲
-   │   │  registerViewer / unregisterViewer / notifyViewerChanged
-   │   │  (panelOpen, barVisible — "true when ANY bar says true")
-BarWidget (screen 1)     BarWidget (screen 2)     …
-├── WidgetButton         ← binds Tracker view props
-└── Loader → Panel       ← panel.tracker = root.tracker (via injectPanel)
+                         Tracker  ← ONE shared instance (qml/qmldir singleton, issue #54)
+                          ▲   ▲
+                          │   │  registerViewer / unregisterViewer / notifyViewerChanged
+                          │   │  (panelOpen, barVisible — "true when ANY bar says true")
+              ┌───────────┘   └───────────┐
+        BarWidget (screen 1)        BarWidget (screen 2)   …
+        ├── WidgetButton            ├── WidgetButton       ← each binds Tracker view props
+        └── Loader → Panel          └── Loader → Panel     ← panel.tracker = root.tracker (via injectPanel)
 ```
+
+Every `BarWidget` instance — one per monitor — has its own `WidgetButton` and its own
+`Loader → Panel`; only `Tracker` itself is shared.
 
 `injectPanel` sets at least: `bar`, `anchorItem`, `hostWidget`, `settings`, `tracker`.
 `tracker` is the shared singleton on every widget instance — `root.tracker`
@@ -94,21 +98,48 @@ one Tracker.
 | `panelOpen` | `true` when **any** registered widget's panel is open — the faster cadence follows whichever monitor's panel is actually open. |
 | `barVisible` | `true` when **any** registered widget is visible. |
 
-Each `BarWidget` calls `Tracker.registerViewer(this)` once (`Component.onCompleted`),
-`Tracker.unregisterViewer(this)` on destruction, and `Tracker.notifyViewerChanged(this)`
-whenever its own `opened` or `barVisible` changes. Tracker re-scans the registered
-widgets' own current state on every call rather than accumulating a delta, so a
-missed or reordered call cannot leave the aggregate stuck.
+Each `BarWidget` calls `Tracker.registerViewer(root)` once (`Component.onCompleted`,
+`root` being that widget's own id), `Tracker.unregisterViewer(root)` on destruction,
+and `Tracker.notifyViewerChanged(root)` whenever its own `opened` or `barVisible`
+changes. Tracker re-scans the registered widgets' own current state on every call
+rather than accumulating a delta, so a missed or reordered *notify* call cannot leave
+the aggregate stuck. This does not cover a missed *unregister*: a widget destroyed
+without its teardown signal firing stays counted (issue #54 review).
+
+An empty registry means two different things depending on when it happens: before
+the first widget has ever registered (startup ordering), `barVisible` fails open —
+same rule #52 used for one widget. After every widget has registered and then gone
+(plugin disabled on rescan, every screen unplugged), it fails **closed** instead —
+`_everRegistered` is the one-way latch that tells the two cases apart. Without it, an
+orphaned singleton with a `panelOpen`/`barVisible` binding but no reader would poll
+the CLI forever.
 
 `busy`, `busyKey`, and `actionErrors` are shared for free: starting a Connection
 from the panel on one monitor shows the busy state and any row error on every
 other monitor, since every Panel now reads the same Tracker object.
 
-`runDoctor()`'s existing guards (`doctorProc.running`, the `_settingsGeneration` /
-`_doctorProcGeneration` staleness check) already dedupe correctly with more than
-one caller — they gate on Tracker's own process state, not on which widget asked,
-so opening a second panel while doctor is already running is a no-op, not a second
-launch. No change was needed there for #54.
+**`runDoctor()` needed a new guard, not just the existing ones.** `doctorProc.running`
+and the `_settingsGeneration` / `_doctorProcGeneration` staleness checks already
+stopped a second *concurrent* launch and discarded a *stale* result — but neither
+stops a *settled* result from being redone. With one Tracker and only one caller, a
+reopened panel re-running an already-answered doctor check was merely wasteful. With
+more than one caller, `degraded` is shared, so a second panel's `runDoctor()` after
+doctor already settled flips every *other* already-open panel's view to "Checking
+setup…" and relaunches doctor for a question this generation already answered.
+`runDoctor()` now returns immediately once `_doctorOk !== null` for the current
+settings generation; the same guard was added to the version-reprobe path
+(`versionProc.onExited`) that could otherwise re-trigger doctor on a transient
+version-gate blip.
+
+**Pick:** suppress a re-run on any settled result, pass or fail. **Why:** a failed
+doctor is as much an answer for this generation as a healthy one — suppressing only
+the pass case would still redo the run (and still re-flip every other panel) on every
+reopen for as long as the environment stays broken. **Discarded:** auto-retry a failed
+doctor on reopen — the existing way to ask for a recheck is a settings change
+(`onSettingsChanged` resets `_doctorOk` to `null` on any write, including a
+no-op-value save), and that stays the only trigger. **Unchanged:** a genuinely new
+settings generation still gets a fresh doctor run on the next open, exactly as before
+#54.
 
 ### View out
 

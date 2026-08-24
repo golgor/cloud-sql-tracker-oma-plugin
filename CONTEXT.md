@@ -35,3 +35,10 @@ _Avoid_: Error alone (reserved for Connection Health state `error`), broken, off
 **Action target**:
 What a start or stop applies to: one Connection id, one Group name, or all Connections.
 _Avoid_: Selector (CLI term unless quoting argv), query
+
+**Viewer**:
+A bar widget instance registered with the shared Tracker (`registerViewer`/
+`unregisterViewer`/`notifyViewerChanged`, issue #54) so its `opened` and `barVisible`
+feed the `panelOpen`/`barVisible` aggregate. One per monitor.
+_Avoid_: Listener, observer, subscriber (this plugin does not use a signal/slot
+observer pattern for this — Tracker re-scans registered instances directly)
