@@ -566,6 +566,17 @@ Item {
     return msg
   }
 
+  // A Doctor report is trustworthy only when it has the right shape
+  // (doctor.v1.md: version 1, checks is an array). Issue #48: a report that
+  // only carries "ok" must not read as a real result — the same fail-closed
+  // rule issue #47 applies to the Status document.
+  function _isWellFormedDoctorReport(report) {
+    if (!report || typeof report !== "object") return false
+    if (report.version !== 1) return false
+    if (!Array.isArray(report.checks)) return false
+    return true
+  }
+
   function _applyDoctorReport(text, exitCode) {
     root._doctorPending = false
     root._doctorWanted = false
@@ -578,7 +589,7 @@ Item {
         report = null
       }
     }
-    if (!report || typeof report !== "object") {
+    if (!root._isWellFormedDoctorReport(report)) {
       var err = String(root._freshText(doctorStderr, root._doctorStderrFresh, 2048) || "").trim()
       if (err.indexOf("error: ") === 0) err = err.slice(7)
       root._doctorOk = false
@@ -588,15 +599,25 @@ Item {
       root._setDegraded("doctor_failed", root._doctorFailMessage)
       return
     }
-    if (report.ok === true) {
+    // cli-contract.v1.md: exit 0 means ok true (warns allowed); exit 3 means
+    // ok false (a check failed). Issue #48: the exit code and "ok" must
+    // agree. A CLI that prints ok:true but exits 3 (or the reverse) is a
+    // broken control plane, not a healthy or a known-failed setup.
+    if (exitCode === 0 && report.ok === true) {
       root._doctorOk = true
       root._doctorFailMessage = ""
       if (root.degraded !== null && root.degraded.kind === "doctor_failed")
         root._clearDegraded()
       return
     }
+    if (exitCode === 3 && report.ok === false) {
+      root._doctorOk = false
+      root._doctorFailMessage = root._doctorFailureMessage(report)
+      root._setDegraded("doctor_failed", root._doctorFailMessage)
+      return
+    }
     root._doctorOk = false
-    root._doctorFailMessage = root._doctorFailureMessage(report)
+    root._doctorFailMessage = "doctor --json exit code " + exitCode + " does not match its \"ok\" field."
     root._setDegraded("doctor_failed", root._doctorFailMessage)
   }
 
