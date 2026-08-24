@@ -8,7 +8,7 @@ var fs = require("fs")
 var path = require("path")
 var assert = require("assert")
 
-var Model = require("../Model.js")
+var Model = require("../qml/Model.js")
 
 function readFixture(name) {
   var file = path.join(__dirname, "..", "fixtures", name)

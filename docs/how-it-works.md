@@ -53,10 +53,10 @@ The CLI is the **control plane**. The plugin is a **client** of that CLI.
 | Path | Role |
 |------|------|
 | `manifest.json` | Plugin id, bar-widget entry, settings (`cliPath`, intervals, `minCliVersion`) |
-| `BarWidget.qml` | Host widget: button, `Tracker` child, `Loader` → Panel |
-| `Panel.qml` | Grouped list chrome: cursor, intent, disabled rows, group actions |
-| `Tracker.qml` | Poll, version gate, doctor-on-open, degraded, one action Process at a time |
-| `Model.js` | `parseStatusDocument` — Status → plain objects |
+| `qml/BarWidget.qml` | Host widget: button, `Tracker` child, `Loader` → Panel |
+| `qml/Panel.qml` | Grouped list chrome: cursor, intent, disabled rows, group actions |
+| `qml/Tracker.qml` | Poll, version gate, doctor-on-open, degraded, one action Process at a time |
+| `qml/Model.js` | `parseStatusDocument` — Status → plain objects |
 | `scripts/dev-link` | Symlink this checkout into Omarchy’s plugin dir |
 | `scripts/check-model.js` | Node smoke tests for Model.js + fixtures |
 | `fixtures/` | Status JSON samples for Model.js |
