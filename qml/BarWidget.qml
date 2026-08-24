@@ -12,10 +12,11 @@ BarWidget {
   id: root
   moduleName: "io.github.golgor.cloud-sql-tracker"
 
-  // Exposes the Tracker instance below as `root.tracker`, the name
-  // docs/modules.md's wiring diagram uses, without colliding with the
-  // child item's own id.
-  property alias tracker: trackerImpl
+  // Exposes the shared Tracker singleton as `root.tracker`, the name
+  // docs/modules.md's wiring diagram uses. `Tracker` here is the bare
+  // singleton identifier (qml/qmldir), not a locally-owned instance —
+  // issue #54.
+  readonly property var tracker: Tracker
 
   readonly property bool opened: panelLoader.item ? panelLoader.item.opened === true : false
 
@@ -56,18 +57,23 @@ BarWidget {
   implicitHeight: button.implicitHeight
 
   onBarChanged: injectPanel()
-  onSettingsChanged: injectPanel()
-
-  // One Tracker per widget instance (docs/modules.md: no shared/service
-  // poll in v1). panelOpen selects the faster poll interval while the
-  // dropdown is open (DESIGN.md "Poll: slower when closed, faster when
-  // open").
-  Tracker {
-    id: trackerImpl
-    settings: root.settings
-    panelOpen: root.opened
-    barVisible: root.barVisible
+  onSettingsChanged: {
+    injectPanel()
+    Tracker.settings = root.settings
   }
+
+  // Issue #54: Tracker is shared by every bar (one per monitor), so
+  // settings/panelOpen/barVisible can no longer be plain bindings owned by
+  // one widget instance. Each widget instead registers itself once and
+  // reports its own state — see the aggregation rule on Tracker.qml's
+  // panelOpen/barVisible.
+  Component.onCompleted: {
+    Tracker.settings = root.settings
+    Tracker.registerViewer(root)
+  }
+  Component.onDestruction: Tracker.unregisterViewer(root)
+  onOpenedChanged: Tracker.notifyViewerChanged(root)
+  onBarVisibleChanged: Tracker.notifyViewerChanged(root)
 
   Loader {
     id: panelLoader

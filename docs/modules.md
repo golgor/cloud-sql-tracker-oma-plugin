@@ -15,11 +15,11 @@ Deep-module layout for implement tickets. Chrome (how it looks) is separate — 
 | Pure internal seam | **`Model.js`** — parse/validate Status JSON only. |
 | UI | Bar and Panel **bind and call** Tracker only. No `Process` in UI files. |
 | Shell `kind: "service"` | **No** for v1. |
-| Multi-monitor poll sharing | **No** for v1 — each widget instance may poll. |
+| Multi-monitor poll sharing | **Yes** (issue #54) — one shared Tracker instance for every bar widget, not one per monitor. |
 
-**Why:** One deep interface keeps CLI I/O local; nested scaffold already matches weather/clock and this repo; host-level service is overkill and uncertain for third-party plugins.
+**Why:** One deep interface keeps CLI I/O local; nested scaffold already matches weather/clock and this repo; host-level service is overkill and uncertain for third-party plugins. Multi-monitor sharing: the bar exists once per monitor (`Bar.qml`'s `Variants { model: Quickshell.screens }`), so a per-widget Tracker polled the same question once per monitor — three monitors meant 36 subprocess launches a minute for one answer.
 
-**Discarded:** Combined `barWidget` → single Panel entry (churn, no extra depth); fat Panel/Bar with inline Process; two *external* modules (Cli + Model) that every caller must compose; `execDetached` for start/stop; continuous doctor poll.
+**Discarded:** Combined `barWidget` → single Panel entry (churn, no extra depth); fat Panel/Bar with inline Process; two *external* modules (Cli + Model) that every caller must compose; `execDetached` for start/stop; continuous doctor poll; a leader-election scheme across per-widget Trackers instead of one shared instance (issue #54 — trades a measurable cost for a race condition).
 
 **Unchanged:** CLI-only contract (`--version`, `status --json`, `start`/`stop`, and `doctor --json` as **panel-open preflight only** — not on the status poll timer); no reads of `connections.json`; manifest settings keys.
 
@@ -29,8 +29,9 @@ Deep-module layout for implement tickets. Chrome (how it looks) is separate — 
 qml/BarWidget.qml   thin: button, open/close/toggle, injectPanel, bind count / degraded
 qml/Panel.qml       stateful chrome Adapter: render, cursor, intent, displayState;
                     calls Tracker only
-qml/Tracker.qml     deep module (child of BarWidget)
+qml/Tracker.qml     deep module — singleton shared by every bar (issue #54)
 qml/Model.js        pure parse/map (used by Tracker; not by UI)
+qml/qmldir          declares Tracker a singleton for this directory (issue #54)
 manifest.json       kinds: ["bar-widget"]; entryPoints.barWidget = qml/BarWidget.qml
 ```
 
@@ -52,25 +53,62 @@ interface is Status parsing only.
 ### Wiring
 
 ```
-BarWidget
-├── Tracker              ← one per widget instance
+Tracker                  ← ONE shared instance (qml/qmldir singleton, issue #54)
+   ▲   ▲
+   │   │  registerViewer / unregisterViewer / notifyViewerChanged
+   │   │  (panelOpen, barVisible — "true when ANY bar says true")
+BarWidget (screen 1)     BarWidget (screen 2)     …
 ├── WidgetButton         ← binds Tracker view props
 └── Loader → Panel       ← panel.tracker = root.tracker (via injectPanel)
 ```
 
 `injectPanel` sets at least: `bar`, `anchorItem`, `hostWidget`, `settings`, `tracker`.
+`tracker` is the shared singleton on every widget instance — `root.tracker`
+resolves to the bare `Tracker` identifier, not a locally-owned object.
 
 ## Tracker interface
 
 Callers (Bar, Panel, later tests against a fake) learn only this surface.
+Since issue #54, Tracker is **one shared instance** for every bar widget
+(one bar per monitor) — see "Sharing" below for how `settings`,
+`panelOpen`, and `barVisible` work with more than one caller.
 
 ### Config in
 
 | Input | Meaning |
 |-------|---------|
 | Settings from manifest | `cliPath`, `minCliVersion`, `refreshIntervalSec`, `refreshIntervalOpenSec` |
-| `panelOpen` | `bool` — select open vs closed poll interval |
-| `barVisible` | `bool` — gate on shell `barHidden` (#52): the timer stops launching new polls only when this is `false` **and** `panelOpen` is also `false`. Default `true`: a host that never sets this polls, matching pre-#52 behavior. |
+| `panelOpen` | `bool`, read-only to callers — select open vs closed poll interval. `true` when **any** registered bar widget's panel is open (issue #54). |
+| `barVisible` | `bool`, read-only to callers — gate on shell `barHidden` (#52). `true` when **any** registered bar widget is visible, or when none has registered yet (issue #54; same fail-open default #52 used for one bar). The poll timer itself stops launching new polls only when this is `false` **and** `panelOpen` is also `false` — an open panel keeps its 2s cadence even behind a hidden bar. |
+
+### Sharing (issue #54)
+
+Tracker is a singleton (`qml/qmldir`): every bar widget instance references
+the bare `Tracker` identifier, never `Tracker { ... }`. Three inputs used to
+come from one widget instance; each has a rule now that many widgets share
+one Tracker.
+
+| Input | Rule with N bar widgets |
+|-------|--------------------------|
+| `settings` | Same object for every instance — `allowMultiple: false` means one widget per bar, and every bar reads the same plugin config. Each widget assigns `Tracker.settings` on change; no conflict since the values agree. |
+| `panelOpen` | `true` when **any** registered widget's panel is open — the faster cadence follows whichever monitor's panel is actually open. |
+| `barVisible` | `true` when **any** registered widget is visible. |
+
+Each `BarWidget` calls `Tracker.registerViewer(this)` once (`Component.onCompleted`),
+`Tracker.unregisterViewer(this)` on destruction, and `Tracker.notifyViewerChanged(this)`
+whenever its own `opened` or `barVisible` changes. Tracker re-scans the registered
+widgets' own current state on every call rather than accumulating a delta, so a
+missed or reordered call cannot leave the aggregate stuck.
+
+`busy`, `busyKey`, and `actionErrors` are shared for free: starting a Connection
+from the panel on one monitor shows the busy state and any row error on every
+other monitor, since every Panel now reads the same Tracker object.
+
+`runDoctor()`'s existing guards (`doctorProc.running`, the `_settingsGeneration` /
+`_doctorProcGeneration` staleness check) already dedupe correctly with more than
+one caller — they gate on Tracker's own process state, not on which widget asked,
+so opening a second panel while doctor is already running is a no-op, not a second
+launch. No change was needed there for #54.
 
 ### View out
 
@@ -128,6 +166,8 @@ silently losing it left callers on pre-action truth until the next tick.
 | `start(target)` | `cloud-sql-tracker start …` then refresh |
 | `stop(target)` | `cloud-sql-tracker stop …` then refresh |
 | `clearActionError(id?)` | Drop one id or all `actionErrors` |
+| `registerViewer(instance)` / `unregisterViewer(instance)` | Bar widget joins/leaves the `panelOpen` / `barVisible` aggregate (issue #54) |
+| `notifyViewerChanged(instance)` | Bar widget's own `opened` or `barVisible` changed — recompute the aggregate |
 
 **Action target:** `{ kind: "id" | "group" | "all", id?: string, group?: string }`  
 Tracker maps that to argv. UI does **not** build argv strings.

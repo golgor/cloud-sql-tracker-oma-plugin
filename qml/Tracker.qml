@@ -8,6 +8,12 @@ import "Model.js" as Model
 // stop() — they never touch Process, argv, or Model.js directly. Contract:
 // docs/modules.md, docs/DESIGN.md, CONTEXT.md ("Tracker", "Degraded",
 // "Action target"). Issue #31: doctor_failed + row-scoped actionErrors.
+//
+// Issue #54: one shared instance for every bar (qml/qmldir declares this
+// file a singleton), not one per widget. A three-monitor desk used to run
+// three Trackers polling the same question — the poll cost no longer grows
+// with the monitor count. Callers get the shared instance by referencing
+// the bare `Tracker` identifier — never `Tracker { ... }` — see BarWidget.qml.
 Item {
   id: root
 
@@ -17,14 +23,83 @@ Item {
   // minCliVersion, refreshIntervalSec, refreshIntervalOpenSec.
   property var settings: ({})
 
-  // Set by the host widget/panel to switch poll cadence. See DESIGN.md
-  // "Poll: slower when closed, faster when open".
+  // Selects poll cadence (DESIGN.md "Poll: slower when closed, faster when
+  // open") and gates pollTimer on the shell's barHidden state (issue #52).
+  // With one shared Tracker and one bar widget per monitor (issue #54),
+  // neither can be a plain externally-set property any more — two bars
+  // disagreeing about "open" or "visible" would just have the
+  // last-evaluated binding win, not an answer. The rule instead is "true
+  // when ANY registered bar says true": panelOpen follows whichever
+  // monitor's panel is actually open, and the poll only fully stops when
+  // every bar is hidden. Each bar widget registers itself once
+  // (registerViewer/unregisterViewer) and calls notifyViewerChanged()
+  // whenever its own `opened` or `barVisible` changes; the aggregate below
+  // is always recomputed from the registered instances themselves, so a
+  // missed or reordered call cannot leave it stuck.
   property bool panelOpen: false
 
   // Set by BarWidget from the shell's barHidden state (issue #52); see
   // DESIGN.md "Doctor-on-open" for the gate this feeds. Host sets false
   // only when it has no reader for the count; default true polls.
   property bool barVisible: true
+
+  // Registered bar widget instances (BarWidget.qml objects), compared by
+  // identity. Not Object.create(null)-keyed like the CLI-id maps elsewhere
+  // in this file: these keys are QML object references, not CLI-controlled
+  // strings, so there is no Object.prototype collision to guard against.
+  property var _viewers: []
+
+  function _viewerIndex(instance) {
+    for (var i = 0; i < root._viewers.length; i++) {
+      if (root._viewers[i] === instance) return i
+    }
+    return -1
+  }
+
+  // Called once by each bar widget on creation. Recomputes the aggregate
+  // right away so a widget that registers already open/visible does not
+  // wait for a later change to be counted.
+  function registerViewer(instance) {
+    if (!instance || root._viewerIndex(instance) !== -1) return
+    root._viewers = root._viewers.concat([instance])
+    root._recomputeViewerAggregates()
+  }
+
+  // Called on bar widget destruction (screen unplugged, shell rescan, …) so
+  // a gone widget cannot hold panelOpen/barVisible open forever.
+  function unregisterViewer(instance) {
+    var idx = root._viewerIndex(instance)
+    if (idx === -1) return
+    var next = root._viewers.slice()
+    next.splice(idx, 1)
+    root._viewers = next
+    root._recomputeViewerAggregates()
+  }
+
+  // Called by a registered widget whenever its own `opened` or
+  // `barVisible` changes. Reads the instance's current state fresh instead
+  // of taking it as an argument, so the aggregate is always a re-scan of
+  // the registered instances' own truth, never a value that can drift out
+  // of sync with them.
+  function notifyViewerChanged(instance) {
+    if (root._viewerIndex(instance) === -1) return
+    root._recomputeViewerAggregates()
+  }
+
+  function _recomputeViewerAggregates() {
+    var anyOpen = false
+    var anyVisible = false
+    for (var i = 0; i < root._viewers.length; i++) {
+      var v = root._viewers[i]
+      if (v.opened === true) anyOpen = true
+      if (v.barVisible !== false) anyVisible = true
+    }
+    root.panelOpen = anyOpen
+    // No bar has registered yet (startup ordering) — default to visible/
+    // polling, the same fail-open rule a single missing barVisible reading
+    // already used (#52).
+    root.barVisible = root._viewers.length === 0 ? true : anyVisible
+  }
 
   readonly property string cliPath: _stringSetting("cliPath", "cloud-sql-tracker")
   readonly property string minCliVersion: _stringSetting("minCliVersion", "0.1.0")

@@ -96,7 +96,16 @@ BarWidget / Panel  →  Tracker  →  Process(cloud-sql-tracker)  →  stdout
 
 - No `Process` / argv / `Model.js` import in `BarWidget.qml` or `Panel.qml`.
 - No `toggle()` on Tracker — UI picks start vs stop from Health state.
-- One Tracker instance per bar widget (no shared shell `service` in v1).
+- One shared Tracker instance for every bar widget (issue #54; not a shell
+  `kind: "service"`). The bar exists once per monitor (`Bar.qml`'s
+  `Variants { model: Quickshell.screens }`), so a per-widget Tracker meant
+  one poll loop per monitor for the same question. The plugin's own
+  `qml/qmldir` declares `Tracker` a singleton; widgets reference the bare
+  `Tracker` identifier and never write `Tracker { ... }`. `panelOpen` /
+  `barVisible` are aggregated across every registered widget ("true when
+  ANY bar says true"); `settings` is the same object for every instance
+  (`allowMultiple: false`, one config for the plugin) so there is no
+  conflict to resolve there.
 - Nested host shape: Panel registers under `hostWidget` for keyboard panel switch.
 
 Detail: [`docs/modules.md`](./docs/modules.md).

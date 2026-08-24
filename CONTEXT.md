@@ -5,7 +5,7 @@ Omarchy bar dropdown that drives the external `cloud-sql-tracker` control plane.
 ## Language
 
 **Tracker**:
-The in-shell module that polls the control plane, holds the last usable Status view, and runs start/stop. One instance per bar widget.
+The in-shell module that polls the control plane, holds the last usable Status view, and runs start/stop. One shared instance for every bar widget (issue #54) — the bar exists once per monitor, and a per-widget Tracker meant one poll loop per monitor for the same answer.
 _Avoid_: Service (collides with Omarchy `kind: service` and systemd units), client, agent, wrapper, control plane (the CLI is the control plane)
 
 **Control plane**:
