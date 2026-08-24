@@ -405,9 +405,11 @@ Item {
     // A poll asked for while one is in flight is *retried*, never dropped.
     // delayedRefresh is the only guaranteed post-action read, and silently
     // losing it left the panel on pre-action truth until the next tick.
-    // Self-limiting: at most one retry is ever armed, and a status poll here
-    // measures ~23ms against this 50ms retry.
-    if (statusProc.running) { pendingStatus.restart(); return }
+    // The retry is a flag, read once statusProc actually stops (its onExited
+    // and onRunningChanged below) — not a self-arming timer. A timer here
+    // used to retrigger every 50ms with no stop condition while a poll
+    // stayed stuck, waking the CPU at 20 Hz (#45).
+    if (statusProc.running) { root._statusRetryWanted = true; return }
     _statusExited = false
     root._statusOverflow = ""
     root._statusStdoutFresh = false
@@ -492,6 +494,12 @@ Item {
   property bool _actionExited: true
   property bool _doctorExited: true
 
+  // Set by _checkStatus's bail path when a poll is requested while one is
+  // already in flight. statusProc's onExited and onRunningChanged read and
+  // clear this flag, then poll once more — a flag, not a timer, so a stuck
+  // CLI cannot turn the retry into an unbounded loop (#45).
+  property bool _statusRetryWanted: false
+
   // Set by a timeout handler right before signal(9) + running = false,
   // cleared at the top of the matching onExited. onExited still fires after
   // that — signal delivery is async, and Quickshell reports the result as a
@@ -546,6 +554,16 @@ Item {
 
   function _missingCliMessage() {
     return "Could not run '" + root.cliPath + "'. Check the cliPath setting or your PATH."
+  }
+
+  // Reads and clears _statusRetryWanted, then polls once more. Called from
+  // statusProc's onExited and onRunningChanged so a poll asked for while one
+  // was in flight always runs again, without a self-arming timer (#45).
+  function _retryStatusIfWanted() {
+    if (root._statusRetryWanted) {
+      root._statusRetryWanted = false
+      root._checkStatus()
+    }
   }
 
   // Safety helper to read StdioCollector output with a hard character cap.
@@ -685,16 +703,6 @@ Item {
     interval: 500
     repeat: false
     onTriggered: root.refresh()
-  }
-
-  // Re-runs a poll _checkStatus could not start because one was in flight.
-  // Only _checkStatus's own bail path arms it, so exactly one retry is pending
-  // at a time.
-  Timer {
-    id: pendingStatus
-    interval: 50
-    repeat: false
-    onTriggered: root._checkStatus()
   }
 
   // ---- Process execution timeouts ------------------------------------------
@@ -933,7 +941,11 @@ Item {
     }
     onExited: function (exitCode) {
       // Stale post-timeout exit — see the _versionTimedOut comment above.
-      if (root._statusTimedOut) { root._statusTimedOut = false; return }
+      if (root._statusTimedOut) {
+        root._statusTimedOut = false
+        root._retryStatusIfWanted()
+        return
+      }
       statusTimeout.stop()
       root._statusExited = true
       if (root._statusOverflow !== "") {
@@ -944,6 +956,7 @@ Item {
         // at most once per poll (#41 followup).
         gc()
         root._applyParsed({ ok: false, degraded: { kind: "status_failed", message: overflowMsg } })
+        root._retryStatusIfWanted()
         return
       }
       if (exitCode !== 0) {
@@ -960,6 +973,7 @@ Item {
             message: msg
           }
         })
+        root._retryStatusIfWanted()
         return
       }
       // No length cap here (#42) — a valid Status document must parse in
@@ -970,6 +984,14 @@ Item {
       // it on streamEnded()) — feed "" instead so this settles Degraded like
       // any other empty document, not the stale one.
       root._applyParsed(Model.parseStatusDocument(root._statusStdoutFresh ? String(statusStdout.text || "") : ""))
+      // Retry check last: statusProc.running can still read true here (its
+      // runningChanged(false) fires *after* onExited, see the _versionExited
+      // comment above), so a poll asked for during this run may only clear
+      // here — see also onRunningChanged below, which catches it once
+      // running truly settles to false. Placed last so a retry that does
+      // launch here cannot have its fresh state (timeout, _statusExited)
+      // overwritten by this onExited call's own bookkeeping.
+      root._retryStatusIfWanted()
     }
     onRunningChanged: {
       if (!running) statusTimeout.stop()
@@ -982,6 +1004,7 @@ Item {
         root._versionOk = false
         root._setDegraded("cli_missing", root._missingCliMessage())
       }
+      if (!running) root._retryStatusIfWanted()
     }
   }
 
