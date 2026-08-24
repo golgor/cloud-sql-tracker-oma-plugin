@@ -346,6 +346,7 @@ Item {
     _versionExited = false
     root._versionOverflow = ""
     root._versionStdoutFresh = false
+    root._versionStderrFresh = false
     _versionProcGeneration = root._settingsGeneration
     versionProc.command = [root.cliPath, "--version"]
     versionTimeout.restart()
@@ -362,6 +363,7 @@ Item {
     _statusExited = false
     root._statusOverflow = ""
     root._statusStdoutFresh = false
+    root._statusStderrFresh = false
     root._statusLaunchEpoch = root._actionEpoch
     statusProc.command = [root.cliPath, "status", "--json"]
     statusTimeout.restart()
@@ -376,6 +378,7 @@ Item {
     _doctorExited = false
     root._doctorOverflow = ""
     root._doctorStdoutFresh = false
+    root._doctorStderrFresh = false
     _doctorProcGeneration = root._settingsGeneration
     doctorProc.command = [root.cliPath, "doctor", "--json"]
     doctorTimeout.restart()
@@ -405,6 +408,8 @@ Item {
     root._pendingActionTarget = target
     _actionExited = false
     root._actionOverflow = ""
+    root._actionStdoutFresh = false
+    root._actionStderrFresh = false
     actionProc.command = [root.cliPath, verb].concat(args)
     actionTimeout.restart()
     actionProc.running = true
@@ -448,16 +453,20 @@ Item {
   property string _doctorOverflow: ""
   property string _actionOverflow: ""
 
-  // True once this run's stdout collector has received at least one
-  // onDataChanged. waitForEnd: false means StdioCollector only sets its
-  // `text` on data arrival — streamEnded() never resets it — so a run that
-  // exits 0 with empty stdout would otherwise leave the *previous* run's
-  // text in the collector and get parsed as this run's document. Reset to
-  // false in the matching launch function; the settle path in onExited must
-  // use "" instead of collector.text when this is still false (#41 followup).
+  // True once this run's collector has received at least one onDataChanged.
+  // waitForEnd: false means StdioCollector only sets its `text` on data arrival
+  // — streamEnded() never resets it — so a run that exits with empty output
+  // would otherwise leave the *previous* run's text in the collector and
+  // reuse stale data or failure messages. Reset to false in the matching
+  // launch function; the settle paths in onExited must use "" when false (#41 followup).
   property bool _versionStdoutFresh: false
+  property bool _versionStderrFresh: false
   property bool _statusStdoutFresh: false
+  property bool _statusStderrFresh: false
   property bool _doctorStdoutFresh: false
+  property bool _doctorStderrFresh: false
+  property bool _actionStdoutFresh: false
+  property bool _actionStderrFresh: false
 
   // Bumped by onSettingsChanged. _versionProcGeneration captures the value
   // at the moment a versionProc launch is kicked off, so its exit handlers
@@ -488,6 +497,11 @@ Item {
     if (!collector || typeof collector.text !== "string") return ""
     var text = collector.text
     return text.length > maxLen ? text.substring(0, maxLen) : text
+  }
+
+  function _freshText(collector, fresh, maxLen) {
+    if (!fresh) return ""
+    return _safeText(collector, maxLen)
   }
 
   // Prefer CLI stderr (often multi-line with a useful last line). Fall back to
@@ -546,7 +560,7 @@ Item {
       }
     }
     if (!report || typeof report !== "object") {
-      var err = String(root._safeText(doctorStderr, 2048) || "").trim()
+      var err = String(root._freshText(doctorStderr, root._doctorStderrFresh, 2048) || "").trim()
       if (err.indexOf("error: ") === 0) err = err.slice(7)
       root._doctorOk = false
       root._doctorFailMessage = err !== ""
@@ -723,6 +737,7 @@ Item {
       id: versionStderr
       waitForEnd: false
       onDataChanged: {
+        root._versionStderrFresh = true
         if (root._versionOverflow === "" && data.byteLength > 65536) {
           root._versionOverflow = "'--version' stderr produced more than 64 KB of output."
           versionProc.signal(9)   // SIGKILL: see versionTimeout
@@ -757,7 +772,7 @@ Item {
         return
       }
       if (exitCode !== 0) {
-        var err = String(root._safeText(versionStderr, 2048) || "").trim()
+        var err = String(root._freshText(versionStderr, root._versionStderrFresh, 2048) || "").trim()
         root._doctorWanted = false
         root._doctorPending = false
         root._setDegraded("cli_missing", err !== "" ? err : ("'" + root.cliPath + " --version' exited with code " + exitCode + "."))
@@ -806,14 +821,14 @@ Item {
     // onDataChanged bounds memory to the configured limit plus one QProcess
     // read pass (#41), rather than StdioCollector buffering unbounded.
     // The Status document is the largest thing this plugin parses, so its
-    // ceiling (1 MB) is the highest of the four processes.
+    // ceiling (256 KB) is the highest of the four processes.
     stdout: StdioCollector {
       id: statusStdout
       waitForEnd: false
       onDataChanged: {
         root._statusStdoutFresh = true
-        if (root._statusOverflow === "" && data.byteLength > 1048576) {
-          root._statusOverflow = "status --json produced more than 1 MB of output."
+        if (root._statusOverflow === "" && data.byteLength > 262144) {
+          root._statusOverflow = "status --json produced more than 256 KB of output."
           statusProc.signal(9)   // SIGKILL: see versionTimeout
           statusProc.running = false
         }
@@ -823,6 +838,7 @@ Item {
       id: statusStderr
       waitForEnd: false
       onDataChanged: {
+        root._statusStderrFresh = true
         if (root._statusOverflow === "" && data.byteLength > 65536) {
           root._statusOverflow = "status --json stderr produced more than 64 KB of output."
           statusProc.signal(9)   // SIGKILL: see versionTimeout
@@ -846,7 +862,7 @@ Item {
         return
       }
       if (exitCode !== 0) {
-        var err = String(root._safeText(statusStderr, 2048) || "").trim()
+        var err = String(root._freshText(statusStderr, root._statusStderrFresh, 2048) || "").trim()
         var msg = err !== "" ? err : ("status --json exited with code " + exitCode + ".")
         if (msg.indexOf("error: ") === 0) msg = msg.slice(7)
         // Config load failures (invalid JSON, unknown keys, …) exit 2 with a
@@ -896,8 +912,8 @@ Item {
       waitForEnd: false
       onDataChanged: {
         root._doctorStdoutFresh = true
-        if (root._doctorOverflow === "" && data.byteLength > 1048576) {
-          root._doctorOverflow = "doctor --json produced more than 1 MB of output."
+        if (root._doctorOverflow === "" && data.byteLength > 65536) {
+          root._doctorOverflow = "doctor --json produced more than 64 KB of output."
           doctorProc.signal(9)   // SIGKILL: see versionTimeout
           doctorProc.running = false
         }
@@ -907,6 +923,7 @@ Item {
       id: doctorStderr
       waitForEnd: false
       onDataChanged: {
+        root._doctorStderrFresh = true
         if (root._doctorOverflow === "" && data.byteLength > 65536) {
           root._doctorOverflow = "doctor --json stderr produced more than 64 KB of output."
           doctorProc.signal(9)   // SIGKILL: see versionTimeout
@@ -973,6 +990,7 @@ Item {
       id: actionStdout
       waitForEnd: false
       onDataChanged: {
+        root._actionStdoutFresh = true
         if (root._actionOverflow === "" && data.byteLength > 65536) {
           root._actionOverflow = "'" + (root._pendingActionVerb !== "" ? root._pendingActionVerb : "action") + "' produced more than 64 KB of output."
           actionProc.signal(9)   // SIGKILL: see versionTimeout
@@ -984,6 +1002,7 @@ Item {
       id: actionStderr
       waitForEnd: false
       onDataChanged: {
+        root._actionStderrFresh = true
         if (root._actionOverflow === "" && data.byteLength > 65536) {
           root._actionOverflow = "'" + (root._pendingActionVerb !== "" ? root._pendingActionVerb : "action") + "' stderr produced more than 64 KB of output."
           actionProc.signal(9)   // SIGKILL: see versionTimeout
@@ -1026,8 +1045,8 @@ Item {
         return
       }
       if (exitCode !== 0) {
-        var out = String(root._safeText(actionStdout, 2048) || "").trim()
-        var err = String(root._safeText(actionStderr, 2048) || "").trim()
+        var out = String(root._freshText(actionStdout, root._actionStdoutFresh, 2048) || "").trim()
+        var err = String(root._freshText(actionStderr, root._actionStderrFresh, 2048) || "").trim()
         var msg = root._formatActionFailure(verb, exitCode, err, out)
         console.warn("Tracker: action exited with code " + exitCode + ":", msg)
         if (ids.length > 0) {
