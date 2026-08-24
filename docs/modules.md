@@ -159,7 +159,7 @@ Golden fixture: sibling CLI `examples/status.v1.json` (copy or path in tests lat
 | `actionProc` | One start/stop at a time (queue or ignore if busy) |
 
 - Tracked `Quickshell.Io.Process` + `StdioCollector` (`waitForEnd`); not `execDetached` for these
-- Timer tick no-ops if `statusProc.running`
+- Timer tick arms a one-shot retry flag if `statusProc.running`, consumed once the process stops (#45)
 - Poll interval from settings; faster when `panelOpen`
 - After action exits, call `refresh()` (short delay allowed)
 

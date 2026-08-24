@@ -39,6 +39,11 @@ Item {
     root._doctorFailMessage = ""
     root._doctorWanted = false
     root._doctorPending = false
+    // A retry armed under the old settings must not launch an ungated poll
+    // against the new cliPath. The flag can straddle up to statusTimeout's
+    // 3s (#45), unlike the old 50ms timer, so it needs the same reset the
+    // doctor flags above already get.
+    root._statusRetryWanted = false
   }
 
   // ---- View out (docs/modules.md "Tracker interface") ----------------------
@@ -556,13 +561,21 @@ Item {
     return "Could not run '" + root.cliPath + "'. Check the cliPath setting or your PATH."
   }
 
-  // Reads and clears _statusRetryWanted, then polls once more. Called from
-  // statusProc's onExited and onRunningChanged so a poll asked for while one
-  // was in flight always runs again, without a self-arming timer (#45).
+  // Reads and clears _statusRetryWanted, then polls once more. Called only
+  // from statusProc's onRunningChanged(!running) — the one point Quickshell
+  // guarantees `running` has actually settled to false, covering every exit
+  // path including "process never started" (#45). Qt.callLater defers the
+  // launch instead of calling _checkStatus() straight from this signal
+  // handler, and coalesces duplicate calls, so the at-most-one-retry
+  // guarantee holds. This depends on `running = false` being an
+  // asynchronous request rather than a synchronous state flip (see
+  // versionTimeout's comment) — if that ever changed, a same-tick call
+  // here could restart statusTimeout from inside its own onTriggered and
+  // lose the #40 timeout.
   function _retryStatusIfWanted() {
     if (root._statusRetryWanted) {
       root._statusRetryWanted = false
-      root._checkStatus()
+      Qt.callLater(root._checkStatus)
     }
   }
 
@@ -941,11 +954,7 @@ Item {
     }
     onExited: function (exitCode) {
       // Stale post-timeout exit — see the _versionTimedOut comment above.
-      if (root._statusTimedOut) {
-        root._statusTimedOut = false
-        root._retryStatusIfWanted()
-        return
-      }
+      if (root._statusTimedOut) { root._statusTimedOut = false; return }
       statusTimeout.stop()
       root._statusExited = true
       if (root._statusOverflow !== "") {
@@ -956,7 +965,6 @@ Item {
         // at most once per poll (#41 followup).
         gc()
         root._applyParsed({ ok: false, degraded: { kind: "status_failed", message: overflowMsg } })
-        root._retryStatusIfWanted()
         return
       }
       if (exitCode !== 0) {
@@ -973,7 +981,6 @@ Item {
             message: msg
           }
         })
-        root._retryStatusIfWanted()
         return
       }
       // No length cap here (#42) — a valid Status document must parse in
@@ -984,14 +991,13 @@ Item {
       // it on streamEnded()) — feed "" instead so this settles Degraded like
       // any other empty document, not the stale one.
       root._applyParsed(Model.parseStatusDocument(root._statusStdoutFresh ? String(statusStdout.text || "") : ""))
-      // Retry check last: statusProc.running can still read true here (its
-      // runningChanged(false) fires *after* onExited, see the _versionExited
-      // comment above), so a poll asked for during this run may only clear
-      // here — see also onRunningChanged below, which catches it once
-      // running truly settles to false. Placed last so a retry that does
-      // launch here cannot have its fresh state (timeout, _statusExited)
-      // overwritten by this onExited call's own bookkeeping.
-      root._retryStatusIfWanted()
+      // No retry check here: statusProc.running still reads true at this
+      // point (runningChanged(false) fires *after* exited — see
+      // versionTimeout's comment above), so _checkStatus() would just bail
+      // and re-set the flag. onRunningChanged below is the single point
+      // where running has actually settled to false, and it is total: it
+      // also covers the "process never started" exit, which never reaches
+      // onExited at all.
     }
     onRunningChanged: {
       if (!running) statusTimeout.stop()
