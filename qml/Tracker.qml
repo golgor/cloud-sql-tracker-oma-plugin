@@ -345,6 +345,7 @@ Item {
     if (versionProc.running) return
     _versionExited = false
     root._versionOverflow = ""
+    root._versionStdoutFresh = false
     _versionProcGeneration = root._settingsGeneration
     versionProc.command = [root.cliPath, "--version"]
     versionTimeout.restart()
@@ -360,6 +361,7 @@ Item {
     if (statusProc.running) { pendingStatus.restart(); return }
     _statusExited = false
     root._statusOverflow = ""
+    root._statusStdoutFresh = false
     root._statusLaunchEpoch = root._actionEpoch
     statusProc.command = [root.cliPath, "status", "--json"]
     statusTimeout.restart()
@@ -373,6 +375,7 @@ Item {
       root._setDegraded("doctor_failed", "Checking setup…")
     _doctorExited = false
     root._doctorOverflow = ""
+    root._doctorStdoutFresh = false
     _doctorProcGeneration = root._settingsGeneration
     doctorProc.command = [root.cliPath, "doctor", "--json"]
     doctorTimeout.restart()
@@ -445,6 +448,17 @@ Item {
   property string _doctorOverflow: ""
   property string _actionOverflow: ""
 
+  // True once this run's stdout collector has received at least one
+  // onDataChanged. waitForEnd: false means StdioCollector only sets its
+  // `text` on data arrival — streamEnded() never resets it — so a run that
+  // exits 0 with empty stdout would otherwise leave the *previous* run's
+  // text in the collector and get parsed as this run's document. Reset to
+  // false in the matching launch function; the settle path in onExited must
+  // use "" instead of collector.text when this is still false (#41 followup).
+  property bool _versionStdoutFresh: false
+  property bool _statusStdoutFresh: false
+  property bool _doctorStdoutFresh: false
+
   // Bumped by onSettingsChanged. _versionProcGeneration captures the value
   // at the moment a versionProc launch is kicked off, so its exit handlers
   // can tell a stale in-flight probe (started against a cliPath/
@@ -464,9 +478,12 @@ Item {
   // Safety helper to read StdioCollector output with a hard character cap.
   // maxLen is required — a default here is what let #42 truncate a valid
   // Status document into broken JSON. Memory growth from a flooding CLI is
-  // now bounded at the producer, by the byte guards on each StdioCollector
-  // below (#41); this helper only trims strings a human reads (stderr
-  // lines, the version string) to a sane display length.
+  // bounded by an early collector guard in each StdioCollector's
+  // onDataChanged below (#41): StdioCollector has already appended and
+  // published the buffer before that guard runs, so the real ceiling is the
+  // configured limit plus one QProcess read pass, not a hard producer cap.
+  // This helper only trims strings a human reads (stderr lines, the version
+  // string) to a sane display length.
   function _safeText(collector, maxLen) {
     if (!collector || typeof collector.text !== "string") return ""
     var text = collector.text
@@ -687,12 +704,14 @@ Item {
     id: versionProc
     running: false
     command: []
-    // waitForEnd: false + a byte guard bounds memory at the producer instead
-    // of after StdioCollector has already buffered an unbounded stream (#41).
+    // waitForEnd: false + an early collector guard on each StdioCollector's
+    // onDataChanged bounds memory to the configured limit plus one QProcess
+    // read pass (#41), rather than StdioCollector buffering unbounded.
     stdout: StdioCollector {
       id: versionStdout
       waitForEnd: false
       onDataChanged: {
+        root._versionStdoutFresh = true
         if (root._versionOverflow === "" && data.byteLength > 65536) {
           root._versionOverflow = "'--version' produced more than 64 KB of output."
           versionProc.signal(9)   // SIGKILL: see versionTimeout
@@ -728,6 +747,10 @@ Item {
       if (root._versionOverflow !== "") {
         var overflowMsg = root._versionOverflow
         root._versionOverflow = ""
+        // Release the ArrayBuffer generations pinned by the overflowed
+        // read before this settles — hostile/broken overflow path only,
+        // at most once per poll (#41 followup).
+        gc()
         root._doctorWanted = false
         root._doctorPending = false
         root._setDegraded("cli_missing", overflowMsg)
@@ -740,7 +763,11 @@ Item {
         root._setDegraded("cli_missing", err !== "" ? err : ("'" + root.cliPath + " --version' exited with code " + exitCode + "."))
         return
       }
-      var text = String(root._safeText(versionStdout, 2048) || "").trim()
+      // Zero-byte run: onDataChanged never fired, so versionStdout.text is
+      // still the *previous* run's text (waitForEnd: false never resets it
+      // on streamEnded()). Treat it as empty so the gate fails as it did
+      // before waitForEnd: false, instead of re-validating an old version.
+      var text = root._versionStdoutFresh ? String(root._safeText(versionStdout, 2048) || "").trim() : ""
       if (!root._versionAtLeast(text, root.minCliVersion)) {
         root._doctorWanted = false
         root._doctorPending = false
@@ -775,14 +802,16 @@ Item {
     id: statusProc
     running: false
     command: []
-    // waitForEnd: false + a byte guard bounds memory at the producer instead
-    // of after StdioCollector has already buffered an unbounded stream (#41).
+    // waitForEnd: false + an early collector guard on each StdioCollector's
+    // onDataChanged bounds memory to the configured limit plus one QProcess
+    // read pass (#41), rather than StdioCollector buffering unbounded.
     // The Status document is the largest thing this plugin parses, so its
     // ceiling (1 MB) is the highest of the four processes.
     stdout: StdioCollector {
       id: statusStdout
       waitForEnd: false
       onDataChanged: {
+        root._statusStdoutFresh = true
         if (root._statusOverflow === "" && data.byteLength > 1048576) {
           root._statusOverflow = "status --json produced more than 1 MB of output."
           statusProc.signal(9)   // SIGKILL: see versionTimeout
@@ -809,6 +838,10 @@ Item {
       if (root._statusOverflow !== "") {
         var overflowMsg = root._statusOverflow
         root._statusOverflow = ""
+        // Release the ArrayBuffer generations pinned by the overflowed
+        // read before this settles — hostile/broken overflow path only,
+        // at most once per poll (#41 followup).
+        gc()
         root._applyParsed({ ok: false, degraded: { kind: "status_failed", message: overflowMsg } })
         return
       }
@@ -830,8 +863,12 @@ Item {
       }
       // No length cap here (#42) — a valid Status document must parse in
       // full. statusStdout's byte guard above is the only ceiling; once it
-      // has not tripped, the whole buffer is fair game for Model.js.
-      root._applyParsed(Model.parseStatusDocument(String(statusStdout.text || "")))
+      // has not tripped, the whole buffer is fair game for Model.js. But a
+      // zero-byte run never fired onDataChanged, so statusStdout.text would
+      // still hold the *previous* run's text (waitForEnd: false never resets
+      // it on streamEnded()) — feed "" instead so this settles Degraded like
+      // any other empty document, not the stale one.
+      root._applyParsed(Model.parseStatusDocument(root._statusStdoutFresh ? String(statusStdout.text || "") : ""))
     }
     onRunningChanged: {
       if (!running) statusTimeout.stop()
@@ -851,12 +888,14 @@ Item {
     id: doctorProc
     running: false
     command: []
-    // waitForEnd: false + a byte guard bounds memory at the producer instead
-    // of after StdioCollector has already buffered an unbounded stream (#41).
+    // waitForEnd: false + an early collector guard on each StdioCollector's
+    // onDataChanged bounds memory to the configured limit plus one QProcess
+    // read pass (#41), rather than StdioCollector buffering unbounded.
     stdout: StdioCollector {
       id: doctorStdout
       waitForEnd: false
       onDataChanged: {
+        root._doctorStdoutFresh = true
         if (root._doctorOverflow === "" && data.byteLength > 1048576) {
           root._doctorOverflow = "doctor --json produced more than 1 MB of output."
           doctorProc.signal(9)   // SIGKILL: see versionTimeout
@@ -889,6 +928,11 @@ Item {
       if (root._doctorOverflow !== "") {
         var overflowMsg = root._doctorOverflow
         root._doctorOverflow = ""
+        // Release the ArrayBuffer generations pinned by the overflowed
+        // read before this settles — hostile/broken overflow path only,
+        // at most once per poll (#41 followup).
+        gc()
+        root._doctorPending = false
         root._doctorOk = false
         root._doctorFailMessage = overflowMsg
         root._setDegraded("doctor_failed", overflowMsg)
@@ -896,8 +940,12 @@ Item {
       }
       // Doctor exits 3 when ok is false but still prints JSON — parse stdout
       // first. Non-JSON / empty stdout uses stderr or exit code. No length
-      // cap here (#42) — same reasoning as statusStdout above.
-      root._applyDoctorReport(String(doctorStdout.text || ""), exitCode)
+      // cap here (#42) — same reasoning as statusStdout above. A zero-byte
+      // run never fired onDataChanged, so doctorStdout.text would still hold
+      // the *previous* run's text (waitForEnd: false never resets it on
+      // streamEnded()) — feed "" instead so _applyDoctorReport's existing
+      // empty-stdout handling applies, not a stale success/failure.
+      root._applyDoctorReport(root._doctorStdoutFresh ? String(doctorStdout.text || "") : "", exitCode)
     }
     onRunningChanged: {
       if (!running) doctorTimeout.stop()
@@ -918,8 +966,9 @@ Item {
     id: actionProc
     running: false
     command: []
-    // waitForEnd: false + a byte guard bounds memory at the producer instead
-    // of after StdioCollector has already buffered an unbounded stream (#41).
+    // waitForEnd: false + an early collector guard on each StdioCollector's
+    // onDataChanged bounds memory to the configured limit plus one QProcess
+    // read pass (#41), rather than StdioCollector buffering unbounded.
     stdout: StdioCollector {
       id: actionStdout
       waitForEnd: false
@@ -961,6 +1010,10 @@ Item {
       if (root._actionOverflow !== "") {
         var overflowMsg = root._actionOverflow
         root._actionOverflow = ""
+        // Release the ArrayBuffer generations pinned by the overflowed
+        // read before this settles — hostile/broken overflow path only,
+        // at most once per poll (#41 followup).
+        gc()
         console.warn("Tracker: " + overflowMsg)
         if (ids.length > 0) {
           root._setActionErrorsForIds(ids, {
