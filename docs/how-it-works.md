@@ -39,7 +39,9 @@ The CLI is the **control plane**. The plugin is a **client** of that CLI.
 ```
 
 1. **Tracker** runs `cloud-sql-tracker --version` and gates on `minCliVersion`.
-2. **Tracker** polls `status --json` on a timer (faster while the panel is open).
+2. **Tracker** polls `status --json` on a timer (faster while the panel is open),
+   and stops launching new polls once the bar is hidden and the panel is closed
+   (#52).
 3. **Model.js** parses the Status document into view props (pure; no I/O).
 4. **Bar** shows running count and a warning when there is a Connection `error`
    or Tracker is **Degraded**.
