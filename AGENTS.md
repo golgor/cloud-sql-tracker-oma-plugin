@@ -62,8 +62,8 @@ The plugin shells out **only** to:
 cloud-sql-tracker --version
 cloud-sql-tracker status --json
 cloud-sql-tracker doctor --json
-cloud-sql-tracker start <id|--group G|--all>
-cloud-sql-tracker stop  <id|--group G|--all>
+cloud-sql-tracker start <id|--group=G|--group G|--all>
+cloud-sql-tracker stop  <id|--group=G|--group G|--all>
 ```
 
 - Do **not** read or write `~/.config/cloud-sql-tracker/connections.json`.

@@ -284,11 +284,40 @@ Item {
 
   // ---- Internal: action targets ---------------------------------------------
 
+  // A target string starting with '-' looks like a CLI option, not data
+  // (issue #49). One rule covers both fields: id and Group name are both
+  // plain text, so the plugin must not parse them differently. The CLI now
+  // refuses a hyphen-leading Group name at config load
+  // (cloud-sql-tracker#85), so this agrees with the contract and stays as
+  // defense in depth — an existing config saved before that fix can still
+  // hold one.
+  function _isHyphenLeading(value) {
+    return String(value).charAt(0) === "-"
+  }
+
   function _targetArgs(target) {
     if (!target) return null
-    if (target.kind === "id" && target.id) return [String(target.id)]
-    if (target.kind === "group" && target.group) return ["--group", String(target.group)]
+    if (target.kind === "id" && target.id && !root._isHyphenLeading(target.id))
+      return [String(target.id)]
+    // Attached form: "--group=NAME" cannot misread a hyphen-leading value as
+    // a separate option, because the value is never its own argv token
+    // (evidence in issue #49). "--group NAME" and "--group=NAME" are the
+    // same option in the CLI contract; only the spelling differs.
+    if (target.kind === "group" && target.group && !root._isHyphenLeading(target.group))
+      return ["--group=" + String(target.group)]
     if (target.kind === "all") return ["--all"]
+    return null
+  }
+
+  // Names the refusal when _targetArgs returns null because id or Group
+  // starts with '-'. Returns null for every other invalid-target case, so
+  // callers keep the existing silent-refusal behavior there.
+  function _hyphenRefusalMessage(verb, target) {
+    if (!target) return null
+    if (target.kind === "id" && target.id && root._isHyphenLeading(target.id))
+      return "Cannot " + verb + " — the Connection id starts with '-'."
+    if (target.kind === "group" && target.group && root._isHyphenLeading(target.group))
+      return "Cannot " + verb + " — the Group name starts with '-'."
     return null
   }
 
@@ -416,7 +445,23 @@ Item {
     }
     var args = _targetArgs(target)
     if (args === null) {
-      console.warn("Tracker: invalid action target for " + verb + ":", JSON.stringify(target))
+      var hyphenMsg = root._hyphenRefusalMessage(verb, target)
+      if (hyphenMsg !== null) {
+        console.warn("Tracker: " + hyphenMsg)
+        var refusedIds = root._idsForTarget(target)
+        if (refusedIds.length > 0) {
+          root._setActionErrorsForIds(refusedIds, {
+            message: hyphenMsg,
+            verb: verb,
+            exitCode: -1
+          })
+        }
+        // Same terminal-outcome contract as timeout/overflow/non-zero-exit:
+        // a settled actionErrors write must not wait for the next poll tick.
+        delayedRefresh.restart()
+      } else {
+        console.warn("Tracker: invalid action target for " + verb + ":", JSON.stringify(target))
+      }
       root._actionEpoch++
       return
     }
