@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 // Node smoke check for Model.js — no QML runtime needed.
 // Run: node scripts/check-model.js
+// This is the repo's only mandated push gate, so it must stay fast. The
+// issue #46 perf report is opt-in: node scripts/check-model.js --perf
 
 "use strict"
 
@@ -102,6 +104,16 @@ function checkPrototypePollutingGroupNames() {
     "groups named after Object.prototype members must still appear"
   )
   assert.strictEqual(result.total, 4, "bar count must match the number of rows the panel can draw")
+
+  // Not just the name: bucketEnabledCounts keys its map with these same
+  // names, so a prototype-named Group's own counters must come back intact
+  // too, not an inherited Object.prototype value or another Group's bucket.
+  var constructorGroup = result.groups.filter(function (g) { return g.name === "constructor" })[0]
+  assert.deepStrictEqual(
+    constructorGroup,
+    { name: "constructor", running: 1, starting: 0, error: 0, stopped: 0, total: 1 },
+    "the \"constructor\" Group's own counters must be exact, not inherited or borrowed"
+  )
 
   console.log("ok: group names colliding with Object.prototype members are not dropped")
 }
@@ -359,6 +371,14 @@ function newConnectionsByGroup(connections) {
   return byGroup
 }
 
+function groupNameFor(i, groupCount) {
+  var index = i % groupCount
+  // Exercise the Object.create(null) bucket keying (issue #44) in the
+  // synthetic dataset too: one Group name collides with an
+  // Object.prototype member instead of every name being a made-up "group-N".
+  return index === 0 ? "constructor" : "group-" + index
+}
+
 function makeSyntheticConnections(count, groupCount) {
   var states = ["running", "starting", "error", "stopped"]
   var out = []
@@ -366,7 +386,7 @@ function makeSyntheticConnections(count, groupCount) {
     out.push({
       id: "c" + i,
       name: "Connection " + i,
-      group: "group-" + (i % groupCount),
+      group: groupNameFor(i, groupCount),
       state: states[i % states.length],
       port: 10000 + (i % 50000),
       address: "127.0.0.1",
@@ -444,12 +464,57 @@ function checkGroupingMatchesOldAlgorithmSynthetic() {
   console.log("ok: one-pass grouping (Model.js and Panel.qml) matches the old nested scan on 500 conn / 100 group synthetic document")
 }
 
+// Issue #46 review: bucketEnabledCounts only creates a bucket for a Group
+// name with at least one *enabled* Connection, so `counts[name] ||
+// emptyGroupCounts(name)` in parseGroups is the only path that can produce
+// a Group whose members are all disabled, or a Group name that exists only
+// as an orphan key in the document's `groups` map with no Connection at
+// all. Pin both.
+function checkGroupCountFallbackForDisabledAndOrphanGroups() {
+  var doc = {
+    version: 1,
+    // "orphan" has no Connection at all; it exists only in this map.
+    groups: { orphan: { running: 0, starting: 0, error: 0, stopped: 0, total: 0 } },
+    connections: [
+      // "all-disabled" has Connections, but none enabled.
+      { id: "a", name: "A", group: "all-disabled", state: "running", port: 1, address: "127.0.0.1", enabled: false },
+      { id: "b", name: "B", group: "all-disabled", state: "error", port: 2, address: "127.0.0.1", enabled: false },
+      { id: "c", name: "C", group: "ok", state: "running", port: 3, address: "127.0.0.1" }
+    ]
+  }
+  var result = Model.parseStatusDocument(JSON.stringify(doc))
+  assert.strictEqual(result.ok, true)
+
+  assert.deepStrictEqual(
+    result.groups.map(function (g) { return g.name }),
+    ["all-disabled", "ok", "orphan"],
+    "an all-disabled Group and an orphan groups-map key both still appear, in first-appearance-then-orphan order"
+  )
+
+  var allDisabled = result.groups.filter(function (g) { return g.name === "all-disabled" })[0]
+  assert.deepStrictEqual(
+    allDisabled,
+    { name: "all-disabled", running: 0, starting: 0, error: 0, stopped: 0, total: 0 },
+    "a Group with only disabled members must read as all-zero, not vanish"
+  )
+
+  var orphan = result.groups.filter(function (g) { return g.name === "orphan" })[0]
+  assert.deepStrictEqual(
+    orphan,
+    { name: "orphan", running: 0, starting: 0, error: 0, stopped: 0, total: 0 },
+    "a Group name with no Connection at all must still appear, all-zero"
+  )
+
+  console.log("ok: a Group with only disabled members and an orphan groups-map key both fall back to all-zero counters")
+}
+
 // Informational only (issue #46's "measured numbers" table) — times the old
 // nested scan against the real Model.js grouping (via the exported
 // parseGroups) for the same worst case the issue names: a Connection list at
 // the 1 MB output ceiling (#41), all in distinct Groups. No assertion on
-// timing: Node's JIT and machine load make a hard threshold flaky. The
-// correctness checks above are what gates the commit.
+// timing: Node's JIT and machine load make a hard threshold flaky, and this
+// case alone runs long enough (~4s) that it must not run on every push — it
+// is opt-in via --perf, not part of the default suite.
 function reportGroupingPerfDelta() {
   var cases = [
     { label: "realistic (20 conns / 4 groups)", count: 20, groups: 4 },
@@ -496,6 +561,12 @@ checkEmptyAddressRejected()
 checkOversizedIdFallsBackToIndex()
 checkGroupingMatchesOldAlgorithmOnFixtures()
 checkGroupingMatchesOldAlgorithmSynthetic()
-reportGroupingPerfDelta()
+checkGroupCountFallbackForDisabledAndOrphanGroups()
+
+// Opt-in only — see the header comment. Keeps the default run (the push
+// gate) fast; run with --perf to see the issue #46 timing table.
+if (process.argv.indexOf("--perf") !== -1) {
+  reportGroupingPerfDelta()
+}
 
 console.log("ok: all Model.js checks passed")

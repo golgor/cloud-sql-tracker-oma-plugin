@@ -185,6 +185,10 @@ Panel {
     return byGroup
   }
 
+  // Returns the live array backing connectionsByGroup's bucket for `name`,
+  // not a copy — the old scan returned a fresh array per call. Read it, do
+  // not push/sort/splice it: mutating it would corrupt that bucket for
+  // every other reader until the next connectionList change rebuilds the map.
   function connectionsForGroup(name) {
     return root.connectionsByGroup[name] || []
   }

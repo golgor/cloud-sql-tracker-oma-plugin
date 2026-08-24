@@ -338,10 +338,11 @@ function parseConnectionError(raw) {
 if (typeof module !== "undefined") {
   module.exports = {
     parseStatusDocument: parseStatusDocument,
-    // Exported only so scripts/check-model.js can check the one-pass
-    // grouping (issue #46) against a reference nested-scan implementation,
-    // on the same connections a real parse produces. Tracker.qml still only
-    // calls parseStatusDocument.
+    // Exported only for scripts/check-model.js's --perf report (issue #46),
+    // which times this against a reference nested-scan implementation on
+    // the same connections. The correctness checks go through
+    // parseStatusDocument, like Tracker.qml does; this export has no other
+    // caller.
     parseGroups: parseGroups
   }
 }
