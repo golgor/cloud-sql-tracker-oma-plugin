@@ -163,6 +163,23 @@ Singleton {
 
   readonly property string cliPath: _stringSetting("cliPath", "cloud-sql-tracker")
   readonly property string minCliVersion: _stringSetting("minCliVersion", "0.1.0")
+
+  // manifest.json default. Used both as the version-gate fallback and the
+  // value named in the fallback warning (issue #50).
+  readonly property string _minCliVersionDefault: "0.1.0"
+
+  // The value the version gate actually compares against (see
+  // versionProc.onExited below) — `minCliVersion` above stays the literal,
+  // content-gated setting value untouched, and this is a plain pure
+  // binding derived from it, not a property written from inside
+  // _onProbeInputsChanged (issue #50 merged onto #54's content-based
+  // gating). A facade whose own value depended on the result of handling
+  // its own change signal would reassign itself from inside
+  // onMinCliVersionChanged and refire it — this has no such feedback path,
+  // since nothing here ever writes back into `minCliVersion` or `settings`.
+  readonly property string _effectiveMinCliVersion:
+    _isWellFormedMinCliVersion(root.minCliVersion) ? root.minCliVersion : root._minCliVersionDefault
+
   readonly property int refreshIntervalSec: _intSetting("refreshIntervalSec", 5, 2, 60)
   readonly property int refreshIntervalOpenSec: _intSetting("refreshIntervalOpenSec", 2, 1, 30)
 
@@ -204,6 +221,12 @@ Singleton {
     // 3s (#45), unlike the old 50ms timer, so it needs the same reset the
     // doctor flags above already get.
     root._statusRetryWanted = false
+    // issue #50, merged onto #54's content-based gating: warn once per
+    // distinct malformed minCliVersion value. Deliberately just a warning,
+    // not a rewrite of `minCliVersion` itself — see _effectiveMinCliVersion
+    // below for why the gate's fallback lives in a separate, pure property
+    // instead of here.
+    root._maybeWarnMinCliVersionShape()
   }
   // cliPath and minCliVersion are the only two settings keys that gate
   // probing today. A future settings key that also gates probing (e.g. a
@@ -432,9 +455,20 @@ Singleton {
 
   // ---- Internal: settings helpers -------------------------------------------
 
+  // Trimmed before the empty check (issue #50 review): a whitespace-only
+  // value must fall back to the manifest default like an actually-empty one,
+  // not survive as a bare string of spaces. Applies to every string setting
+  // — cliPath and minCliVersion both go through this — so a leading- or
+  // trailing-space typo of the same value now behaves the same way, instead
+  // of one being shape-refused and the other reaching a "missing CLI"
+  // launch attempt. Trade-off, accepted: an absolute path with a genuine
+  // trailing space (unusual on Linux, not impossible) is unreachable
+  // through this setting.
   function _stringSetting(name, fallback) {
     var value = settings ? settings[name] : undefined
-    return (value === undefined || value === null || value === "") ? fallback : String(value)
+    if (value === undefined || value === null) return fallback
+    var trimmed = String(value).trim()
+    return trimmed === "" ? fallback : trimmed
   }
 
   function _intSetting(name, fallback, min, max) {
@@ -443,6 +477,80 @@ Singleton {
     if (n < min) n = min
     if (n > max) n = max
     return n
+  }
+
+  // minCliVersion contract (manifest.json): a plain major.minor.patch
+  // version, matched end to end — not just a semver-looking prefix. A value
+  // outside that shape ("latest", a stray word, trailing text) must not
+  // block the widget forever by comparing against a required version
+  // nothing can ever satisfy (issue #50). This check is deliberately
+  // stricter than _versionParts()/_versionAtLeast() below, which stay
+  // unanchored so a CLI-reported version with build metadata still gates —
+  // that leniency is only ever meant for the CLI's own --version output,
+  // never for this setting.
+  function _isWellFormedMinCliVersion(value) {
+    return value.length <= 32 && /^\d+\.\d+\.\d+$/.test(value)
+  }
+
+  // Warns once when the raw minCliVersion value does not match the
+  // documented shape (issue #50). Called from _onProbeInputsChanged, which
+  // fires on any content-based change to cliPath or minCliVersion — so this
+  // also re-checks (and, via the memory below, does not re-warn) on a
+  // cliPath-only change that leaves an already-bad minCliVersion untouched.
+  // `root.minCliVersion` is already trimmed by _stringSetting above; no
+  // further trim needed here.
+  property var _minCliVersionLastWarnedRaw: null
+
+  function _maybeWarnMinCliVersionShape() {
+    if (root._isWellFormedMinCliVersion(root.minCliVersion)) {
+      root._minCliVersionLastWarnedRaw = null
+      return
+    }
+    if (root._minCliVersionLastWarnedRaw === root.minCliVersion) return
+    root._minCliVersionLastWarnedRaw = root.minCliVersion
+    console.warn("Tracker: minCliVersion setting '" + root.minCliVersion + "' is not a plain major.minor.patch version. Using the default " + root._minCliVersionDefault + ".")
+  }
+
+  // cliPath contract (README.md, AGENTS.md "CLI discovery: PATH or absolute
+  // cliPath setting only"): the value is an absolute path, or a bare command
+  // name with no directory component, resolved on PATH. A value carrying a
+  // '/' that does not start at root (e.g. "./tracker", "sub/dir/tracker")
+  // would run a binary relative to the working directory of the shell
+  // process instead — issue #50. `value` is assumed already trimmed (it
+  // comes from the `cliPath` property, which goes through _stringSetting).
+  // Returns null when the shape is fine, or a message naming the problem.
+  //
+  // The message is prefixed "Setting error: " (issue #50 review): every
+  // other Degraded state this plugin reports is a control-plane problem,
+  // and chrome.md's cli_missing title is "cloud-sql-tracker not found" — a
+  // false headline sitting over a setting mistake without that prefix.
+  // Quoted with single quotes, like every other operator-facing string in
+  // this file. The echoed value is capped so an oversized setting cannot
+  // blow up the tooltip the way an unbounded CLI output could before the
+  // #41 byte guard.
+  function _cliPathShapeError(value) {
+    if (value.length > 4096) return "Setting error: cliPath is longer than 4096 characters."
+    if (value.charAt(0) === "/" || value.indexOf("/") === -1) return null
+    var shown = value.length > 128 ? value.substring(0, 128) + "…" : value
+    return "Setting error: cliPath '" + shown + "' is a relative path. Use an absolute path or a bare command name."
+  }
+
+  // Shared launch-site guard (issue #50 review): every function that builds
+  // a Process.command from root.cliPath — _checkVersion, _checkStatus,
+  // _checkDoctor, _runAction — calls this first and returns immediately
+  // when it reports true. Centralizing both the check and its side effects
+  // here, not just the check, means a shape-invalid cliPath can never reach
+  // execvp through any of the four, present or future, without each call
+  // site having to remember what settling on Degraded requires.
+  function _bailOnCliPathShape() {
+    var cliPathError = root._cliPathShapeError(root.cliPath)
+    if (cliPathError === null) return false
+    root.loaded = true
+    root._versionOk = false
+    root._doctorWanted = false
+    root._doctorPending = false
+    root._setDegraded("cli_missing", cliPathError)
+    return true
   }
 
   // ---- Internal: version gate ------------------------------------------------
@@ -643,6 +751,7 @@ Singleton {
 
   function _checkVersion() {
     if (versionProc.running) return
+    if (root._bailOnCliPathShape()) return
     _versionExited = false
     root._versionOverflow = ""
     root._versionStdoutFresh = false
@@ -654,6 +763,13 @@ Singleton {
   }
 
   function _checkStatus() {
+    // Guard needed here specifically (not just at _checkVersion()):
+    // _retryStatusIfWanted() calls this unconditionally (via Qt.callLater)
+    // from statusProc's onRunningChanged, gated by neither _versionOk nor a
+    // shape check — a settings edit landing mid-poll could otherwise launch
+    // a shape-invalid cliPath, and a stray healthy document from whatever
+    // that path resolves to would clear Degraded until the next tick.
+    if (root._bailOnCliPathShape()) return
     // A poll asked for while one is in flight is *retried*, never dropped.
     // delayedRefresh is the only guaranteed post-action read, and silently
     // losing it left the panel on pre-action truth until the next tick.
@@ -674,6 +790,7 @@ Singleton {
 
   function _checkDoctor() {
     if (doctorProc.running) return
+    if (root._bailOnCliPathShape()) return
     root._doctorPending = true
     if (root.degraded === null || root.degraded.kind === "doctor_failed")
       root._setDegraded("doctor_failed", "Checking setup…")
@@ -689,6 +806,13 @@ Singleton {
 
   function _runAction(verb, target) {
     if (actionProc.running) return
+    if (root._bailOnCliPathShape()) {
+      // Refused, not launched — still advance actionEpoch so a caller
+      // holding optimistic state for this action can let go (see
+      // "Document provenance" above _actionEpoch's declaration).
+      root._actionEpoch++
+      return
+    }
     if (!root._versionOk) {
       var gateMsg = "Cannot " + verb + " — version gate has not passed" +
         (root.degraded ? (" (" + root.degraded.kind + ").") : ".")
@@ -1145,10 +1269,13 @@ Singleton {
       // on streamEnded()). Treat it as empty so the gate fails as it did
       // before waitForEnd: false, instead of re-validating an old version.
       var text = root._versionStdoutFresh ? String(root._safeText(versionStdout, 2048) || "").trim() : ""
-      if (!root._versionAtLeast(text, root.minCliVersion)) {
+      // _effectiveMinCliVersion, not the raw minCliVersion setting (issue
+      // #50): a malformed setting falls back to the manifest default here
+      // instead of gating against a required version nothing can satisfy.
+      if (!root._versionAtLeast(text, root._effectiveMinCliVersion)) {
         root._doctorWanted = false
         root._doctorPending = false
-        root._setDegraded("cli_old", "cloud-sql-tracker " + (text !== "" ? text : "(unknown)") + " is older than the required " + root.minCliVersion + ".")
+        root._setDegraded("cli_old", "cloud-sql-tracker " + (text !== "" ? text : "(unknown)") + " is older than the required " + root._effectiveMinCliVersion + ".")
         return
       }
       root._versionOk = true
