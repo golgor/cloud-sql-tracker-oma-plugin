@@ -87,24 +87,29 @@ Since issue #54, Tracker is **one shared instance** for every bar widget
 
 ### Sharing (issue #54)
 
-Tracker is a singleton (`qml/qmldir`): every bar widget instance references
-the bare `Tracker` identifier, never `Tracker { ... }`. Three inputs used to
-come from one widget instance; each has a rule now that many widgets share
+Tracker is a singleton (`qml/qmldir`): every bar widget instance references it
+through a namespaced directory import (`import "." as Shared`, `Shared.Tracker`
+in `BarWidget.qml`) — never the bare `Tracker` identifier (Qt's plain
+same-directory implicit lookup does not honor qmldir's `singleton` line — see
+`BarWidget.qml`'s import comment), never `Tracker { ... }`. Three inputs used
+to come from one widget instance; each has a rule now that many widgets share
 one Tracker.
 
 | Input | Rule with N bar widgets |
 |-------|--------------------------|
-| `settings` | Same object for every instance — `allowMultiple: false` means one widget per bar, and every bar reads the same plugin config. Each widget assigns `Tracker.settings` on change; no conflict since the values agree. |
+| `settings` | Same object for every instance — `allowMultiple: false` means one widget per bar, and every bar reads the same plugin config. Each widget assigns `Shared.Tracker.settings` unconditionally on change (no reference-identity guard — see below); no conflict since the values agree. |
 | `panelOpen` | `true` when **any** registered widget's panel is open — the faster cadence follows whichever monitor's panel is actually open. |
 | `barVisible` | `true` when **any** registered widget is visible. |
 
-Each `BarWidget` calls `Tracker.registerViewer(root)` once (`Component.onCompleted`,
-`root` being that widget's own id), `Tracker.unregisterViewer(root)` on destruction,
-and `Tracker.notifyViewerChanged(root)` whenever its own `opened` or `barVisible`
-changes. Tracker re-scans the registered widgets' own current state on every call
-rather than accumulating a delta, so a missed or reordered *notify* call cannot leave
-the aggregate stuck. This does not cover a missed *unregister*: a widget destroyed
-without its teardown signal firing stays counted (issue #54 review).
+Each `BarWidget` calls `Shared.Tracker.registerViewer(root)` once
+(`Component.onCompleted`, `root` being that widget's own id),
+`Shared.Tracker.unregisterViewer(root)` on destruction, and
+`Shared.Tracker.notifyViewerChanged(root)` whenever its own `opened` or
+`barVisible` changes. Tracker re-scans the registered widgets' own current state
+on every call rather than accumulating a delta, so a missed or reordered
+*notify* call cannot leave the aggregate stuck. This does not cover a missed
+*unregister*: a widget destroyed without its teardown signal firing stays
+counted (issue #54 review).
 
 An empty registry means two different things depending on when it happens: before
 the first widget has ever registered (startup ordering), `barVisible` fails open —
@@ -125,21 +130,65 @@ stops a *settled* result from being redone. With one Tracker and only one caller
 reopened panel re-running an already-answered doctor check was merely wasteful. With
 more than one caller, `degraded` is shared, so a second panel's `runDoctor()` after
 doctor already settled flips every *other* already-open panel's view to "Checking
-setup…" and relaunches doctor for a question this generation already answered.
-`runDoctor()` now returns immediately once `_doctorOk !== null` for the current
-settings generation; the same guard was added to the version-reprobe path
-(`versionProc.onExited`) that could otherwise re-trigger doctor on a transient
-version-gate blip.
+setup…" and relaunches doctor for a question already answered. `runDoctor()` now
+returns immediately once `_doctorOk !== null`; the same guard was added to the
+version-reprobe path (`versionProc.onExited`) that could otherwise re-trigger doctor
+on a transient version-gate blip.
 
-**Pick:** suppress a re-run on any settled result, pass or fail. **Why:** a failed
-doctor is as much an answer for this generation as a healthy one — suppressing only
-the pass case would still redo the run (and still re-flip every other panel) on every
-reopen for as long as the environment stays broken. **Discarded:** auto-retry a failed
-doctor on reopen — the existing way to ask for a recheck is a settings change
-(`onSettingsChanged` resets `_doctorOk` to `null` on any write, including a
-no-op-value save), and that stays the only trigger. **Unchanged:** a genuinely new
-settings generation still gets a fresh doctor run on the next open, exactly as before
-#54.
+**Pick (round 2): `_doctorOk` resets to `null` when the aggregate `panelOpen`
+transitions true→false — the last open panel closing — not only on a settings
+change.** `runDoctor()`'s guard then suppresses exactly one thing: a *second*
+monitor's panel opening concurrently with (or shortly after) a *first* monitor's
+already-settled doctor check. A *fresh* open — every panel closed, then one
+reopens — always re-runs doctor. **Why:** the round 1 fix (suppress until a
+settings change, full stop) made a settled result outlive the session that asked
+for it — a 5s doctorProc timeout on resume-from-sleep, or one momentary exec
+failure, pinned full-body `doctor_failed` for the rest of the session, with
+reopening the panel doing nothing. That silently contradicted DESIGN.md,
+chrome.md, how-it-works.md, and README.md, which all promise doctor runs once
+per panel **open** — not once per session. **Discarded:** suppress only a
+*passing* result and still rerun on failure — still redoes the run (and still
+re-flips every other open panel) on every single reopen for as long as the
+environment stays broken, which is the original clobber bug from a different
+starting state. **Discarded:** auto-retry a failed doctor on every reopen
+regardless of whether another panel is still open — that removes the guard
+entirely and reintroduces the redundant-relaunch-and-clobber problem the guard
+exists to stop. **Unchanged:** a genuinely new settings generation (`cliPath`,
+`minCliVersion` actually changing value) still resets `_doctorOk` to `null` on
+its own and gets a fresh doctor run on the next open.
+
+**`_doctorWanted` lifecycle (round 2 fix).** Every code path that settles
+`_doctorOk` (to `true` or `false`) must also leave `_doctorWanted` `false` —
+otherwise a later version-gate flap (CLI briefly unreachable, then found again)
+can find `_doctorWanted` stranded `true` from before the settlement and
+re-launch doctor, re-pinning "Checking setup…" on a check this generation
+already answered. `_applyDoctorReport()` already cleared both flags up front
+for every branch; `doctorTimeout.onTriggered` and the doctor-overflow exit in
+`doctorProc.onExited` did not — both now clear `_doctorWanted` unconditionally,
+before their own settings-generation staleness check, so a stale-generation
+early return cannot skip it either.
+
+**Settings guard (round 2): moved from the write side to the read side.** A
+reference-identity guard on `BarWidget`'s `Shared.Tracker.settings = …` write
+was tried and discarded: it can suppress a **real** edit if the shell mutates
+the settings object in place and re-emits the same reference, and it may never
+engage at all if the shell instead hands out a fresh wrapper object per read —
+both are shell behaviors this plugin does not control, so guarding on object
+identity is wrong in either direction. **Pick:** `BarWidget` assigns
+`Shared.Tracker.settings` unconditionally (matching pre-#54 behavior); Tracker
+gates the expensive reset (`_versionOk = false`, `_settingsGeneration++`,
+clearing doctor state) behind `onCliPathChanged`/`onMinCliVersionChanged`
+instead of `onSettingsChanged` — these are `readonly property string`, so QML's
+own change notification is already content-based (string equality on the
+*effective*, post-fallback value), not reference-based like the `var settings`
+they derive from. **Why:** answers exactly "did the raw values that gate
+probing actually change", using change detection QML already provides, with no
+extra last-seen-value cache to keep in sync by hand. **Discarded:** reference
+identity on the write side (wrong on both above shell behaviors); "first
+registrar owns settings" (breaks the moment that widget's monitor is
+unplugged, since it stops writing anything a survivor could react to).
+`refreshIntervalSec` / `refreshIntervalOpenSec` need no such guard — they are
+read reactively on every poll tick, nothing caches them.
 
 ### View out
 

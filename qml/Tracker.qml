@@ -14,8 +14,9 @@ import "Model.js" as Model
 // Issue #54: one shared instance for every bar, not one per widget. A
 // three-monitor desk used to run three Trackers polling the same question —
 // the poll cost no longer grows with the monitor count. Callers get the
-// shared instance by referencing the bare `Tracker` identifier — never
-// `Tracker { ... }` — see BarWidget.qml.
+// shared instance through a namespaced directory import — see
+// `import "." as Shared` / `Shared.Tracker` in BarWidget.qml — never
+// `Tracker { ... }`.
 //
 // Singleton mechanism (issue #54 review — three parts, all required):
 //   1. `pragma Singleton` above, in *this* file — the file qml/qmldir
@@ -37,8 +38,10 @@ import "Model.js" as Model
 //      only visual Items — Timer, Process, and StdioCollector below are all
 //      QObject-derived, and this file already has no visual properties
 //      (anchors, width/height, visible, …) to lose by leaving `Item`.
-//   3. Callers must reach this file through a real import, not the bare
-//      same-directory implicit lookup — see `import "."` in BarWidget.qml.
+//   3. Callers must reach this file through a real, *named* import, not the
+//      bare same-directory implicit lookup and not even an unqualified
+//      `import "."` — see BarWidget.qml's `import "." as Shared` and its
+//      import comment for why round 2 review moved to a namespaced import.
 // Not possible to prove end to end in this container (no live Quickshell
 // or Omarchy shell here) — a multi-monitor smoke test per the issue's "How
 // to check" is a merge precondition.
@@ -139,7 +142,34 @@ Singleton {
       if (v.opened === true) anyOpen = true
       if (v.barVisible !== false) anyVisible = true
     }
+    var wasOpen = root._anyOpen
     root._anyOpen = anyOpen
+    // Issue #54 round 2: closing the last open panel ends this doctor
+    // preflight "session" — reset _doctorOk so the *next* open re-runs
+    // doctor instead of reusing this session's answer forever.
+    // DESIGN.md/chrome.md/how-it-works.md/README.md all promise doctor
+    // runs once per panel OPEN, not once per app lifetime: runDoctor()'s
+    // `_doctorOk !== null` guard exists to stop a SECOND monitor's
+    // concurrent open from re-running an already-settled check, not to
+    // pin a stale pass or a transient failure (a doctorProc timeout on
+    // resume-from-sleep, a momentary exec error) for the rest of the
+    // session. Only fires on the true->false edge, not every recompute, so
+    // an already-closed bar's own churn (barVisible flapping) cannot
+    // repeatedly reset a session that never had a panel open in the first
+    // place.
+    if (wasOpen && !anyOpen) {
+      root._doctorOk = null
+      root._doctorFailMessage = ""
+      // Nobody is waiting on a deferred "run doctor once version passes"
+      // request any more -- a future open calls runDoctor() again and
+      // re-establishes it if still needed.
+      root._doctorWanted = false
+      // Only stand down if nothing is actually still running: a doctorProc
+      // already in flight settles itself (onExited / doctorTimeout), and
+      // forcing this false here would let a status poll landing before it
+      // settles show the switchboard early (_applyParsed reads this flag).
+      if (!doctorProc.running) root._doctorPending = false
+    }
     // Issue #54 review: two different reasons for an empty list need two
     // different answers. Nobody has ever registered (startup ordering) —
     // default to visible/polling, the same fail-open rule a single missing
@@ -157,12 +187,32 @@ Singleton {
   readonly property int refreshIntervalSec: _intSetting("refreshIntervalSec", 5, 2, 60)
   readonly property int refreshIntervalOpenSec: _intSetting("refreshIntervalOpenSec", 2, 1, 30)
 
-  // A settings change may repoint cliPath or tighten minCliVersion — recheck
-  // the version gate on the next refresh() instead of trusting a stale pass.
-  // Also bumps _settingsGeneration so a versionProc already in flight against
-  // the *old* cliPath/minCliVersion cannot validate the *new* settings when
-  // it exits — see _checkVersion() and versionProc's handlers below.
-  onSettingsChanged: {
+  // Issue #54 round 2: this used to be onSettingsChanged, firing the reset
+  // below on every *reassignment* of the settings object -- but with N bar
+  // widgets each writing `Shared.Tracker.settings = root.settings` (settings is
+  // the same object for every instance, so every widget's write is
+  // normally a no-op value), that fired once per widget for a single real
+  // change, and once per widget on every widget's own onCompleted/settings
+  // rebind even when nothing changed. A reference-identity guard on the
+  // write side was tried and discarded (see BarWidget.qml) because it can
+  // be wrong in both directions depending on how the shell hands out
+  // settings objects.
+  //
+  // Pick: gate on cliPath/minCliVersion actually changing *value*, not on
+  // settings being reassigned. These are already `readonly property
+  // string`, so QML's own change notification is content-based (string
+  // equality), not reference-based like the `var settings` it derives
+  // from -- two reassignments that resolve to the same effective cliPath
+  // (same string, whatever object or key shape produced it) already do not
+  // re-fire onCliPathChanged/onMinCliVersionChanged, with no extra
+  // bookkeeping needed here. Why: this is the exact "did the raw values
+  // that gate probing actually change" question, answered by the value
+  // types QML already tracks for us, comparing the *effective* (post
+  // fallback) value rather than a raw last-seen cache that would need to
+  // be kept in sync by hand. refreshIntervalSec/refreshIntervalOpenSec need
+  // no such guard -- they are read reactively on every poll, nothing caches
+  // them.
+  function _onProbeInputsChanged() {
     _versionOk = false
     _settingsGeneration++
     // Next panel open should re-run doctor against the new cliPath.
@@ -176,6 +226,8 @@ Singleton {
     // doctor flags above already get.
     root._statusRetryWanted = false
   }
+  onCliPathChanged: root._onProbeInputsChanged()
+  onMinCliVersionChanged: root._onProbeInputsChanged()
 
   // ---- View out (docs/modules.md "Tracker interface") ----------------------
 
@@ -283,26 +335,35 @@ Singleton {
   // refresh(). Not on the status poll timer. Requires version gate pass.
   //
   // Issue #54: more than one Panel can call this now — one per monitor, all
-  // sharing this Tracker. Once doctor has settled for the current settings
-  // generation, a later call (a second monitor's panel opening, or the same
-  // panel reopening) must be a no-op — degraded is shared too, so without
-  // this guard a second call re-flips every *other* already-open panel's
-  // view to "Checking setup…" (_setDegraded below writes the one shared
-  // property) and relaunches doctor for a question this generation already
-  // answered.
+  // sharing this Tracker. Two different calls both reach this guard and
+  // must be told apart: a SECOND monitor's panel opening while a FIRST
+  // monitor's panel is already open (and doctor has already settled for
+  // it) must be a no-op — degraded is shared too, so without this guard a
+  // second call re-flips the already-open panel's view to "Checking
+  // setup…" (_setDegraded below writes the one shared property) and
+  // relaunches doctor for a question already answered. A FRESH open — every
+  // panel closed, then one reopens — must NOT be a no-op: DESIGN.md,
+  // chrome.md, how-it-works.md, and README.md all promise doctor runs once
+  // per panel *open*, and a settled result that outlives every panel
+  // closing (a doctorProc timeout on resume-from-sleep, a momentary exec
+  // failure) must not pin `doctor_failed` for the rest of the session.
   //
-  // Pick: suppress on ANY settled result, pass or fail (`_doctorOk !==
-  // null`), not just a pass. Why: a failed doctor is as much an answer for
-  // this generation as a healthy one — suppressing only the pass case would
-  // still re-run doctor, and still re-flip every other panel to "Checking
-  // setup…", on every single reopen for as long as the environment stays
-  // broken. Discarded: retry a failed doctor automatically on reopen — the
-  // one existing way to ask for a recheck is a settings change
-  // (onSettingsChanged resets _doctorOk to null on *any* write, including a
-  // no-op-value save), and that stays the only trigger rather than adding a
-  // second, harder-to-explain one. Unchanged: a genuinely new settings
-  // generation (cliPath, minCliVersion, …) still resets _doctorOk to null
-  // and gets a fresh doctor run on the next open, same as before #54.
+  // Pick: `_doctorOk !== null` here only suppresses a *concurrent*
+  // duplicate open — _recomputeViewerAggregates() resets `_doctorOk` back
+  // to null the moment the aggregate `panelOpen` transitions true->false
+  // (every panel closed), so this guard's null check is false again by the
+  // time any panel next opens, and that reopen runs a fresh doctor check.
+  // Why: this keeps the guard doing exactly the one job the issue asked for
+  // (stop a second monitor's open from redoing an in-progress or
+  // just-settled answer) without also making a settled result outlive the
+  // session that asked for it. Discarded: suppress forever until a settings
+  // change (round 2's initial fix) — a failed doctor became terminal for
+  // the whole session, silently contradicting all four "once per open"
+  // docs. Discarded: retry a failed doctor on every reopen regardless of
+  // whether another panel is still open — that is exactly the redundant
+  // relaunch-and-clobber this guard exists to stop. Unchanged: a genuinely
+  // new settings generation (cliPath, minCliVersion) still resets
+  // `_doctorOk` to null on its own and gets a fresh run on the next open.
   function runDoctor() {
     if (root._doctorOk !== null) return
     // Hide the switchboard until doctor settles (even before Process starts).
@@ -699,7 +760,8 @@ Singleton {
   property bool _actionStdoutFresh: false
   property bool _actionStderrFresh: false
 
-  // Bumped by onSettingsChanged. _versionProcGeneration captures the value
+  // Bumped by _onProbeInputsChanged (cliPath/minCliVersion actually
+  // changing value). _versionProcGeneration captures the value
   // at the moment a versionProc launch is kicked off, so its exit handlers
   // can tell a stale in-flight probe (started against a cliPath/
   // minCliVersion that settings has since replaced) from a current one, and
@@ -937,6 +999,12 @@ Singleton {
         doctorProc.signal(9)   // SIGKILL: see versionTimeout
         doctorProc.running = false
         root._doctorPending = false
+        // Issue #54 round 2: clear unconditionally, before the generation
+        // check below -- every path that settles _doctorOk must also leave
+        // _doctorWanted false, or a later version-gate flap can find
+        // _doctorWanted stranded true and re-launch doctor (re-pinning
+        // "Checking setup…") for a check this generation already failed.
+        root._doctorWanted = false
         if (root._doctorProcGeneration !== root._settingsGeneration) return
         root._doctorOk = false
         root._doctorFailMessage = "'doctor --json' timed out after 5s."
@@ -1228,6 +1296,10 @@ Singleton {
         // at most once per poll (#41 followup).
         gc()
         root._doctorPending = false
+        // Issue #54 round 2: same lifecycle rule as doctorTimeout above —
+        // every path that settles _doctorOk must also leave _doctorWanted
+        // false.
+        root._doctorWanted = false
         root._doctorOk = false
         root._doctorFailMessage = overflowMsg
         root._setDegraded("doctor_failed", overflowMsg)
