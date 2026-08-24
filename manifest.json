@@ -11,7 +11,7 @@
     "bar-widget"
   ],
   "entryPoints": {
-    "barWidget": "BarWidget.qml"
+    "barWidget": "qml/BarWidget.qml"
   },
   "barWidget": {
     "displayName": "Cloud SQL Tracker",

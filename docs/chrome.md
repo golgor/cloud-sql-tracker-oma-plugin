@@ -714,7 +714,7 @@ the moment a theme customises them.
    mkdir -p /tmp/qmlshim/qs
    ln -sfn /usr/share/omarchy/shell/Ui      /tmp/qmlshim/qs/Ui
    ln -sfn /usr/share/omarchy/shell/Commons /tmp/qmlshim/qs/Commons
-   /usr/lib/qt6/bin/qmllint -I /tmp/qmlshim -I /usr/lib/qt6/qml Panel.qml
+   /usr/lib/qt6/bin/qmllint -I /tmp/qmlshim -I /usr/lib/qt6/qml qml/Panel.qml
    ```
 
    Judge the result against the shipped panels rather than against zero: they produce

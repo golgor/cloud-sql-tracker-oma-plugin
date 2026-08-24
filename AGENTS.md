@@ -86,10 +86,10 @@ BarWidget / Panel  →  Tracker  →  Process(cloud-sql-tracker)  →  stdout
 
 | File | Role |
 |------|------|
-| `BarWidget.qml` | Thin host: button, Loader, injectPanel |
-| `Panel.qml` | Chrome Adapter: cursor, intent, displayState; **calls Tracker only** |
-| `Tracker.qml` | Deep module: poll, version gate, doctor-on-open, start/stop, degraded |
-| `Model.js` | Pure Status parse (no QML, no Process) |
+| `qml/BarWidget.qml` | Thin host: button, Loader, injectPanel |
+| `qml/Panel.qml` | Chrome Adapter: cursor, intent, displayState; **calls Tracker only** |
+| `qml/Tracker.qml` | Deep module: poll, version gate, doctor-on-open, start/stop, degraded |
+| `qml/Model.js` | Pure Status parse (no QML, no Process) |
 | `manifest.json` | `kinds: ["bar-widget"]`; settings keys |
 
 **Hard rules**

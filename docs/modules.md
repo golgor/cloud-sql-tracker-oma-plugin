@@ -26,12 +26,12 @@ Deep-module layout for implement tickets. Chrome (how it looks) is separate — 
 ## Files
 
 ```
-BarWidget.qml   thin: button, open/close/toggle, injectPanel, bind count / degraded
-Panel.qml       stateful chrome Adapter: render, cursor, intent, displayState;
-                calls Tracker only
-Tracker.qml     deep module (child of BarWidget)
-Model.js        pure parse/map (used by Tracker; not by UI)
-manifest.json   kinds: ["bar-widget"]; entryPoints.barWidget = BarWidget.qml
+qml/BarWidget.qml   thin: button, open/close/toggle, injectPanel, bind count / degraded
+qml/Panel.qml       stateful chrome Adapter: render, cursor, intent, displayState;
+                    calls Tracker only
+qml/Tracker.qml     deep module (child of BarWidget)
+qml/Model.js        pure parse/map (used by Tracker; not by UI)
+manifest.json       kinds: ["bar-widget"]; entryPoints.barWidget = qml/BarWidget.qml
 ```
 
 **Panel is thin in the dimension that matters and not in the one it does not.**
