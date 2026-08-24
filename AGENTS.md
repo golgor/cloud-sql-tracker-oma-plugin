@@ -130,9 +130,10 @@ omarchy restart shell
 - Open a **Pull Request** into `main`. Link the issue (`Closes #N` when the PR
   fully resolves it).
 - **Two reviewers** check each change, not one review.
+- **Review scope:** start with the diff since the last reviewed commit. Trace callers, callees, and contracts only when the change relies on them. Report a verified finding outside the diff. Do not re-audit the full branch only because a follow-up commit exists.
 - **chatgpt-sol** checks the spec against the frozen contracts. **Opus-5** checks
   module seams, depth, and code style.
-- A **Sonnet-5** subagent implements the change on a git worktree. The parent
+- A **Sonnet-5** or **Gemini-3.6-flash** subagent implements the change on a git worktree. The parent
   writes no product code.
 - Reviewers are **read-only**. A human performs the merge.
 - Prefer one logical slice per PR.
