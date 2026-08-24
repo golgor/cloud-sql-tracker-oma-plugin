@@ -410,8 +410,8 @@ Item {
     // A poll asked for while one is in flight is *retried*, never dropped.
     // delayedRefresh is the only guaranteed post-action read, and silently
     // losing it left the panel on pre-action truth until the next tick.
-    // The retry is a flag, read once statusProc actually stops (its onExited
-    // and onRunningChanged below) — not a self-arming timer. A timer here
+    // The retry is a flag, read once statusProc actually stops (its
+    // onRunningChanged below) — not a self-arming timer. A timer here
     // used to retrigger every 50ms with no stop condition while a poll
     // stayed stuck, waking the CPU at 20 Hz (#45).
     if (statusProc.running) { root._statusRetryWanted = true; return }
@@ -500,9 +500,9 @@ Item {
   property bool _doctorExited: true
 
   // Set by _checkStatus's bail path when a poll is requested while one is
-  // already in flight. statusProc's onExited and onRunningChanged read and
-  // clear this flag, then poll once more — a flag, not a timer, so a stuck
-  // CLI cannot turn the retry into an unbounded loop (#45).
+  // already in flight. statusProc's onRunningChanged reads and clears this
+  // flag, then polls once more — a flag, not a timer, so a stuck CLI cannot
+  // turn the retry into an unbounded loop (#45).
   property bool _statusRetryWanted: false
 
   // Set by a timeout handler right before signal(9) + running = false,
@@ -564,14 +564,12 @@ Item {
   // Reads and clears _statusRetryWanted, then polls once more. Called only
   // from statusProc's onRunningChanged(!running) — the one point Quickshell
   // guarantees `running` has actually settled to false, covering every exit
-  // path including "process never started" (#45). Qt.callLater defers the
-  // launch instead of calling _checkStatus() straight from this signal
-  // handler, and coalesces duplicate calls, so the at-most-one-retry
-  // guarantee holds. This depends on `running = false` being an
-  // asynchronous request rather than a synchronous state flip (see
-  // versionTimeout's comment) — if that ever changed, a same-tick call
-  // here could restart statusTimeout from inside its own onTriggered and
-  // lose the #40 timeout.
+  // path including "process never started" (#45). Qt.callLater moves the
+  // launch out of this signal handler. The flag, not Qt.callLater, is what
+  // bounds this to one retry: it is cleared before the deferred call is
+  // scheduled, so a duplicate call finds it false and does nothing. This
+  // depends on `running = false` being an asynchronous request, not a
+  // synchronous state flip (see versionTimeout's comment).
   function _retryStatusIfWanted() {
     if (root._statusRetryWanted) {
       root._statusRetryWanted = false
