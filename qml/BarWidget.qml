@@ -19,6 +19,14 @@ BarWidget {
 
   readonly property bool opened: panelLoader.item ? panelLoader.item.opened === true : false
 
+  // `omarchy-toggle-bar` parks the bar off-screen instead of unmapping it
+  // (Bar.qml), so nothing stops this widget's poll on its own (#52).
+  // `barHidden` is shell-owned state, not a documented plugin contract —
+  // default to visible (poll) when `bar` or the property is missing, so a
+  // shell rename fails toward the pre-#52 always-on behavior instead of
+  // freezing the bar's count.
+  readonly property bool barVisible: !(root.bar && root.bar.barHidden === true)
+
   function open() {
     if (panelLoader.item)
       panelLoader.item.open()
@@ -58,6 +66,7 @@ BarWidget {
     id: trackerImpl
     settings: root.settings
     panelOpen: root.opened
+    barVisible: root.barVisible
   }
 
   Loader {

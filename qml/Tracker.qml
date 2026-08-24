@@ -21,6 +21,15 @@ Item {
   // "Poll: slower when closed, faster when open".
   property bool panelOpen: false
 
+  // Set by BarWidget from the shell's barHidden state (issue #52). Gates
+  // pollTimer only — DESIGN.md's 5s/2s cadence is unchanged for a visible
+  // bar; this adds the third state DESIGN.md never named: bar hidden, no
+  // reader for the count. barHidden is shell-owned, not a documented
+  // plugin contract, so BarWidget defaults this to true (poll) when it
+  // cannot read that state — a rename fails toward the pre-#52 always-on
+  // behavior, not a silently frozen count.
+  property bool barVisible: true
+
   readonly property string cliPath: _stringSetting("cliPath", "cloud-sql-tracker")
   readonly property string minCliVersion: _stringSetting("minCliVersion", "0.1.0")
   readonly property int refreshIntervalSec: _intSetting("refreshIntervalSec", 5, 2, 60)
@@ -700,7 +709,13 @@ Item {
   Timer {
     id: pollTimer
     interval: (root.panelOpen ? root.refreshIntervalOpenSec : root.refreshIntervalSec) * 1000
-    running: true
+    // Stopping instead of unmapping means a hidden bar keeps every timer
+    // alive unless the widget itself gates them (#52). An in-flight poll
+    // when the bar hides is left to finish — it just lands on a count
+    // nobody reads. triggeredOnStart fires again the moment barVisible
+    // goes true, so revealing the bar refreshes at once instead of
+    // showing a stale count until the next tick.
+    running: root.barVisible
     repeat: true
     triggeredOnStart: true
     onTriggered: root.refresh()

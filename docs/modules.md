@@ -70,6 +70,7 @@ Callers (Bar, Panel, later tests against a fake) learn only this surface.
 |-------|---------|
 | Settings from manifest | `cliPath`, `minCliVersion`, `refreshIntervalSec`, `refreshIntervalOpenSec` |
 | `panelOpen` | `bool` — select open vs closed poll interval |
+| `barVisible` | `bool` — gate the poll timer on shell `barHidden` (#52). Default `true`: a host that never sets this polls, matching pre-#52 behavior. |
 
 ### View out
 
@@ -160,7 +161,7 @@ Golden fixture: sibling CLI `examples/status.v1.json` (copy or path in tests lat
 
 - Tracked `Quickshell.Io.Process` + `StdioCollector` (`waitForEnd`); not `execDetached` for these
 - Timer tick arms a one-shot retry flag if `statusProc.running`, consumed once the process stops (#45)
-- Poll interval from settings; faster when `panelOpen`
+- Poll interval from settings; faster when `panelOpen`; timer does not run at all when `barVisible` is `false`
 - After action exits, call `refresh()` (short delay allowed)
 
 ## Depth
