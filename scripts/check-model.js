@@ -292,6 +292,195 @@ function checkOversizedIdFallsBackToIndex() {
   console.log("ok: an oversized id falls back to \"index N\" in the message")
 }
 
+// ---- Issue #46: one-pass grouping must match the old nested-scan output ---
+//
+// Reference implementations of the algorithms this issue replaces. They
+// exist only as a slow, obviously-correct oracle for the checks below — do
+// not "fix" them to be faster, and do not let Model.js call them.
+
+// Pre-#46 Model.js: one full scan of `connections` per Group.
+function oldGroupEnabledCounts(name, connections) {
+  var running = 0, starting = 0, error = 0, stopped = 0, total = 0
+  for (var i = 0; i < connections.length; i++) {
+    var c = connections[i]
+    if (c.group !== name || !c.enabled) continue
+    total++
+    if (c.state === "running") running++
+    else if (c.state === "starting") starting++
+    else if (c.state === "error") error++
+    else stopped++
+  }
+  return { name: name, running: running, starting: starting, error: error, stopped: stopped, total: total }
+}
+
+// Group name order is unchanged by #46 (both old and new derive it the same
+// way); kept here so the oracle does not depend on Model.js internals at all.
+function oldGroupNamesInOrder(rawGroups, connections) {
+  var source = rawGroups && typeof rawGroups === "object" ? rawGroups : {}
+  var names = []
+  var seen = Object.create(null)
+  for (var i = 0; i < connections.length; i++) {
+    var name = connections[i].group
+    if (name !== "" && !seen[name]) { seen[name] = true; names.push(name) }
+  }
+  for (var key in source) {
+    if (Object.prototype.hasOwnProperty.call(source, key) && !seen[key]) { seen[key] = true; names.push(key) }
+  }
+  return names
+}
+
+function oldParseGroups(rawGroups, connections) {
+  return oldGroupNamesInOrder(rawGroups, connections).map(function (name) {
+    return oldGroupEnabledCounts(name, connections)
+  })
+}
+
+// Pre-#46 Panel.qml: one full scan of `connections` per Group, again, for
+// the panel's per-group row list (the second nested scan the issue calls out).
+function oldConnectionsForGroup(name, connections) {
+  var list = []
+  for (var i = 0; i < connections.length; i++) {
+    if (connections[i].group === name) list.push(connections[i])
+  }
+  return list
+}
+
+// The Panel.qml rewrite in JS form, so its behaviour can be checked here
+// even though Panel.qml itself only runs inside Quickshell. Keep this in
+// sync with qml/Panel.qml's connectionsByGroup/connectionsForGroup by eye —
+// the checks below compare its output against the old scan on every case.
+function newConnectionsByGroup(connections) {
+  var byGroup = Object.create(null)
+  for (var i = 0; i < connections.length; i++) {
+    var c = connections[i]
+    if (!byGroup[c.group]) byGroup[c.group] = []
+    byGroup[c.group].push(c)
+  }
+  return byGroup
+}
+
+function makeSyntheticConnections(count, groupCount) {
+  var states = ["running", "starting", "error", "stopped"]
+  var out = []
+  for (var i = 0; i < count; i++) {
+    out.push({
+      id: "c" + i,
+      name: "Connection " + i,
+      group: "group-" + (i % groupCount),
+      state: states[i % states.length],
+      port: 10000 + (i % 50000),
+      address: "127.0.0.1",
+      // Scatter some disabled rows so enabled-only counters stay meaningful.
+      enabled: (i % 7) !== 0,
+      error: null
+    })
+  }
+  return out
+}
+
+function buildStatusDocument(connections) {
+  return JSON.stringify({
+    version: 1,
+    ts: "2026-08-24T00:00:00Z",
+    cli_version: "0.1.0",
+    running: 0, starting: 0, error: 0, stopped: 0, total: 0,
+    groups: {},
+    connections: connections
+  })
+}
+
+// Model.js grouping must produce the same Groups, in the same order, with
+// the same counters, as the old per-Group nested scan — on the fixtures
+// already in the suite.
+function checkGroupingMatchesOldAlgorithmOnFixtures() {
+  ["status.v1.happy.json", "status.v1.empty.json"].forEach(function (fixture) {
+    var raw = JSON.parse(readFixture(fixture))
+    var result = Model.parseStatusDocument(readFixture(fixture))
+    assert.strictEqual(result.ok, true, fixture + " should parse ok")
+
+    var expected = oldParseGroups(raw.groups, result.connections)
+    assert.deepStrictEqual(
+      result.groups,
+      expected,
+      "one-pass grouping must match the old nested-scan output for " + fixture
+    )
+  })
+  console.log("ok: one-pass grouping matches the old nested-scan algorithm on existing fixtures")
+}
+
+// Same equivalence check on a synthetic document large enough to make a
+// nested scan visibly slower (500 Connections / 100 Groups, per the issue's
+// "how to check" fixture). Also pins Group order to first appearance.
+function checkGroupingMatchesOldAlgorithmSynthetic() {
+  var connections = makeSyntheticConnections(500, 100)
+  var doc = buildStatusDocument(connections)
+  var result = Model.parseStatusDocument(doc)
+  assert.strictEqual(result.ok, true, "synthetic 500/100 document should parse ok")
+  assert.strictEqual(result.groups.length, 100)
+
+  var expectedGroups = oldParseGroups({}, result.connections)
+  assert.deepStrictEqual(
+    result.groups,
+    expectedGroups,
+    "one-pass grouping must match the old nested-scan output on a 500 conn / 100 group document"
+  )
+  assert.deepStrictEqual(
+    result.groups.map(function (g) { return g.name }),
+    connections.map(function (c) { return c.group })
+      .filter(function (name, i, all) { return all.indexOf(name) === i }),
+    "group order must follow first appearance in connections"
+  )
+
+  // Panel.qml's rewrite: same content per Group as the old per-Group scan.
+  var byGroup = newConnectionsByGroup(result.connections)
+  result.groups.forEach(function (g) {
+    assert.deepStrictEqual(
+      byGroup[g.name] || [],
+      oldConnectionsForGroup(g.name, result.connections),
+      "connectionsForGroup(\"" + g.name + "\") must match the old per-Group scan"
+    )
+  })
+
+  console.log("ok: one-pass grouping (Model.js and Panel.qml) matches the old nested scan on 500 conn / 100 group synthetic document")
+}
+
+// Informational only (issue #46's "measured numbers" table) — times the old
+// nested scan against the real Model.js grouping (via the exported
+// parseGroups) for the same worst case the issue names: a Connection list at
+// the 1 MB output ceiling (#41), all in distinct Groups. No assertion on
+// timing: Node's JIT and machine load make a hard threshold flaky. The
+// correctness checks above are what gates the commit.
+function reportGroupingPerfDelta() {
+  var cases = [
+    { label: "realistic (20 conns / 4 groups)", count: 20, groups: 4 },
+    { label: "big real install (100 conns / 10 groups)", count: 100, groups: 10 },
+    { label: "500 conns / 100 groups", count: 500, groups: 100 },
+    { label: "1800 conns / 1 group", count: 1800, groups: 1 },
+    { label: "1800 conns / 1800 groups (worst case)", count: 1800, groups: 1800 }
+  ]
+
+  console.log("perf (issue #46, node, not QML/V4 — treat as a floor):")
+  cases.forEach(function (c) {
+    var connections = makeSyntheticConnections(c.count, c.groups)
+    var rawGroups = {}
+    var iterations = 200
+
+    var t0 = process.hrtime.bigint()
+    for (var i = 0; i < iterations; i++) oldParseGroups(rawGroups, connections)
+    var t1 = process.hrtime.bigint()
+    for (var j = 0; j < iterations; j++) Model.parseGroups(rawGroups, connections)
+    var t2 = process.hrtime.bigint()
+
+    var oldMs = Number(t1 - t0) / 1e6 / iterations
+    var newMs = Number(t2 - t1) / 1e6 / iterations
+    var speedup = oldMs / newMs
+    console.log(
+      "  " + c.label + ": nested " + oldMs.toFixed(3) + " ms, one-pass " +
+      newMs.toFixed(3) + " ms, " + speedup.toFixed(1) + "x"
+    )
+  })
+}
+
 checkHappyFixture()
 checkPrototypePollutingGroupNames()
 checkBadVersionFixture()
@@ -305,5 +494,8 @@ checkInvalidPortRange()
 checkEmptyGroupRejected()
 checkEmptyAddressRejected()
 checkOversizedIdFallsBackToIndex()
+checkGroupingMatchesOldAlgorithmOnFixtures()
+checkGroupingMatchesOldAlgorithmSynthetic()
+reportGroupingPerfDelta()
 
 console.log("ok: all Model.js checks passed")
