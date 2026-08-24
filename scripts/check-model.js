@@ -243,6 +243,7 @@ function checkEmptyGroupRejected() {
 
   assert.strictEqual(result.ok, false, "an empty group must be rejected")
   assert.strictEqual(result.degraded.kind, "schema")
+  assert.ok(result.degraded.message.indexOf("\"group\"") !== -1, "message should name the \"group\" field")
 
   console.log("ok: a Connection with an empty \"group\" is rejected")
 }
@@ -262,8 +263,33 @@ function checkEmptyAddressRejected() {
 
   assert.strictEqual(result.ok, false, "an empty address must be rejected")
   assert.strictEqual(result.degraded.kind, "schema")
+  assert.ok(result.degraded.message.indexOf("\"address\"") !== -1, "message should name the \"address\" field")
 
   console.log("ok: a Connection with an empty \"address\" is rejected")
+}
+
+// Rework #47 blocker: an oversized id must not reach the Degraded message
+// verbatim (it would blow up the Panel body and the bar tooltip). The
+// message must fall back to "index N" instead of the raw id.
+function checkOversizedIdFallsBackToIndex() {
+  var oversizedId = new Array(201).join("a") // 200 chars, over config.v1.md's 64-char max
+  var doc = {
+    version: 1,
+    groups: {},
+    connections: [{
+      id: oversizedId, name: "Bad", group: "g", state: "stopped",
+      port: 1, address: "127.0.0.1", error: null
+    }]
+  }
+  var result = Model.parseStatusDocument(JSON.stringify(doc))
+
+  assert.strictEqual(result.ok, false, "an oversized id must still be rejected")
+  assert.strictEqual(result.degraded.kind, "schema")
+  assert.ok(result.degraded.message.indexOf("index 0") !== -1, "message should fall back to the index")
+  assert.ok(result.degraded.message.indexOf(oversizedId) === -1, "message must not carry the oversized id")
+  assert.ok(result.degraded.message.length < 200, "message must stay bounded")
+
+  console.log("ok: an oversized id falls back to \"index N\" in the message")
 }
 
 checkHappyFixture()
@@ -278,5 +304,6 @@ checkInvalidConnectionIdCharset()
 checkInvalidPortRange()
 checkEmptyGroupRejected()
 checkEmptyAddressRejected()
+checkOversizedIdFallsBackToIndex()
 
 console.log("ok: all Model.js checks passed")

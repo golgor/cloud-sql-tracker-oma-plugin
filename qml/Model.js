@@ -61,7 +61,14 @@ function parseStatusDocument(text) {
 
   var parsedConnections = parseConnections(parsed.connections)
   if (!Array.isArray(parsedConnections)) {
-    return schemaFailure(parsedConnections.error, 1)
+    // Guard the read: parseConnections always returns { error: string } on
+    // failure, but this falls back instead of throwing if that ever slips.
+    return schemaFailure(
+      (parsedConnections && typeof parsedConnections.error === "string")
+        ? parsedConnections.error
+        : "A connection in the Status document is invalid.",
+      1
+    )
   }
   var connections = parsedConnections
   // UI counts are enabled-only (issue #26). Document totals still include
@@ -210,14 +217,23 @@ function parseConnections(rawConnections) {
     var raw = rawConnections[i]
     var result = parseConnection(raw)
     if (result.ok !== true) {
-      var ref = (raw && typeof raw === "object" && typeof raw.id === "string" && raw.id !== "")
-        ? "id " + JSON.stringify(raw.id)
-        : "index " + i
-      return { error: "Connection at " + ref + " has " + result.reason + "." }
+      return { error: "Connection at " + connectionRef(raw, i) + " has " + result.reason + "." }
     }
     out.push(result.connection)
   }
   return out
+}
+
+// A raw.id can be attacker- or bug-controlled and unbounded in length —
+// this message reaches the Panel Degraded body and the shell-owned bar
+// tooltip. Only use it when it is a string within config.v1.md's max id
+// length (64); anything longer or non-string falls back to the index, and
+// the 64-char slice is a defensive second bound on top of that check.
+function connectionRef(raw, index) {
+  if (raw && typeof raw === "object" && typeof raw.id === "string" && raw.id !== "" && raw.id.length <= 64) {
+    return "id " + JSON.stringify(raw.id.slice(0, 64))
+  }
+  return "index " + index
 }
 
 // Checks only the fields Tracker/Panel read from a Connection: id, name,
