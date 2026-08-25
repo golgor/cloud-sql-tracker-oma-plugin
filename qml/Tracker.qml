@@ -808,7 +808,10 @@ Singleton {
   }
 
   function _checkDoctor() {
-    if (doctorProc.running) return
+    if (doctorProc.running) {
+      root._doctorWanted = true
+      return
+    }
     if (root._bailOnCliPathShape()) return
     root._doctorPending = true
     if (root.degraded === null || root.degraded.kind === "doctor_failed")
@@ -1127,17 +1130,29 @@ Singleton {
       root._doctorFailMessage = ""
       if (root.degraded !== null && root.degraded.kind === "doctor_failed")
         root._clearDegraded()
+      if (root._doctorWanted) {
+        root._doctorWanted = false
+        root._checkDoctor()
+      }
       return
     }
     if (exitCode === 3 && report.ok === false) {
       root._doctorOk = false
       root._doctorFailMessage = root._doctorFailureMessage(report)
       root._setDegraded("doctor_failed", root._doctorFailMessage)
+      if (root._doctorWanted) {
+        root._doctorWanted = false
+        root._checkDoctor()
+      }
       return
     }
     root._doctorOk = false
     root._doctorFailMessage = "doctor --json exit code " + exitCode + " does not match its \"ok\" field."
     root._setDegraded("doctor_failed", root._doctorFailMessage)
+    if (root._doctorWanted) {
+      root._doctorWanted = false
+      root._checkDoctor()
+    }
   }
 
   // ---- Timers ---------------------------------------------------------------
