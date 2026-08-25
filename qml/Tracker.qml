@@ -374,12 +374,13 @@ Singleton {
       // already cleared _doctorWanted, above, unconditionally, regardless
       // of whether doctorProc is running — the stale branch this settle
       // lands on only clears _doctorWanted itself when the settle reason
-      // is a timeout or an overflow (issue #58), leaving it untouched on a
-      // plain exit so a *newer* generation's own request (set after this
-      // reset, by a fresh runDoctor()) can survive. _doctorPending is left
-      // alone here: it is not wrong yet (a check genuinely is still
-      // running), and the stale branch it lands on clears it once the
-      // process actually settles.
+      // is a timeout (issue #58 review; pre-refactor equivalence, not the
+      // round 2 rule, since this branch settles nothing), leaving it
+      // untouched on a plain exit or an overflow so a *newer* generation's
+      // own request (set after this reset, by a fresh runDoctor()) can
+      // survive. _doctorPending is left alone here: it is not wrong yet (a
+      // check genuinely is still running), and the stale branch it lands
+      // on clears it once the process actually settles.
       root._doctorProcGeneration = -1
     } else {
       // Nothing is running -- _doctorPending being true here would already
@@ -1529,21 +1530,27 @@ Singleton {
         // Settings (cliPath) changed while doctor was in flight — drop this
         // generation's result. A newer generation's own doctor call decides
         // _doctorOk and _doctorWanted for itself from here.
-        var staleOverflowMsg = root._doctorOverflow
         root._doctorOverflow = ""
         root._doctorPending = false
-        // Issue #58 review: only a timeout or an overflow is a definite,
-        // self-contained failure for this generation, so only those two
-        // clear _doctorWanted here (the #54 round 2 rule — a settled
-        // failure must not leave _doctorWanted stranded true). A plain
-        // stale exit proves nothing about this generation and must leave
-        // _doctorWanted untouched: a *newer* generation's runDoctor() may
-        // have set it while this old probe was still in flight (the
-        // first-open race, issue #31), relying on it to survive so the
-        // version-gate success path can launch that generation's doctor
-        // check once doctorProc frees up. Clearing it unconditionally here
-        // would drop that request on the floor.
-        if (timeoutMsg !== "" || staleOverflowMsg !== "") root._doctorWanted = false
+        // Pre-refactor equivalence, not the #54 round 2 rule: that rule
+        // binds only a path that *settles* _doctorOk for the current
+        // generation, and this branch settles nothing (it is the stale
+        // branch). Before issue #58, doctorTimeout's own handler cleared
+        // _doctorWanted unconditionally, ahead of and independent of this
+        // generation check, so a stale *timeout* exit already landed with
+        // _doctorWanted false; a stale *overflow* or plain exit did not —
+        // this branch left it alone in both those cases, same as it does
+        // now. Reproduced here rather than changed: a plain stale exit, or
+        // a stale overflow, proves nothing about this generation and must
+        // leave _doctorWanted untouched, since a *newer* generation's
+        // runDoctor() may have set it while this old probe was still in
+        // flight (the first-open race, issue #31) — clearing it here would
+        // drop that request on the floor. The wedge this guards against
+        // (#54 round 3) stays closed regardless: every path that actually
+        // settles _doctorOk for the *current* generation — the timeout and
+        // overflow branches below, _applyDoctorReport, and
+        // _endDoctorSession — already clears _doctorWanted itself.
+        if (timeoutMsg !== "") root._doctorWanted = false
         return
       }
       // Settle preference (issue #58) — see versionProc.onExited above for

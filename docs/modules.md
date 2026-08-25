@@ -174,7 +174,7 @@ again if the underlying setup issue is still there.
   the wedge below: `_endDoctorSession` already clears `_doctorWanted`
   itself, unconditionally, before forcing the generation stale — the stale
   branch it lands on only clears `_doctorWanted` again when the settle
-  reason is a timeout or an overflow, leaving it alone on a plain exit so a
+  reason is a timeout, leaving it alone on a plain exit or an overflow so a
   *newer* generation's own request (set by a runDoctor() call after this
   reset) can survive to be acted on.
 - The reset moved from an `if (wasOpen && !anyOpen)` check inside
@@ -194,22 +194,34 @@ answered. `_applyDoctorReport()` clears both flags up front for every branch,
 so this always holds for a fresh-generation settle.
 
 A *stale*-generation settle (this run's generation no longer matches
-`_settingsGeneration`) is different on purpose, since issue #58's review: it
-clears `_doctorWanted` only when the settle reason is a timeout or an
-overflow — both are a definite, self-contained failure for that old
-generation, so nothing else is waiting on this run's answer. A **plain**
-stale exit (a normal, non-timeout, non-overflow settle for a generation
-nobody current cares about any more) leaves `_doctorWanted` untouched: a
-*newer* generation's `runDoctor()` can legitimately set it while an older
-generation's doctorProc is still in flight (the first-open race, issue #31),
-and the version-gate success path that follows needs to still see it once
-that older run finally frees `doctorProc` up — clearing it unconditionally on
-every stale exit would drop that request on the floor. The mechanism for all
-of this now lives in `doctorProc.onExited`'s generation-stale branch (a
-timeout handler only records the reason and kills; `onExited` owns every
-write) — see `_endDoctorSession`'s inline comment in `Tracker.qml` for the one
-case where a stale settle and this function's own explicit clear can land on
-the same run.
+`_settingsGeneration`) is different, and it is **not** governed by the round 2
+rule above: that rule binds a path that *settles* `_doctorOk` for the current
+generation, and the stale branch settles nothing for anyone. Its
+`_doctorWanted` handling instead just reproduces the pre-issue-#58 behavior
+byte for byte: before issue #58 moved timeout cleanup into `onExited`,
+`doctorTimeout`'s own handler cleared `_doctorWanted` unconditionally, ahead
+of and independent of the generation check — so a stale *timeout* exit
+already landed with `_doctorWanted` false, while a stale *overflow* or a
+stale plain exit did not (that clear lived only in the timeout handler, not
+in the overflow or normal-exit paths). The stale branch in
+`doctorProc.onExited` reproduces exactly that split: it clears
+`_doctorWanted` only when the settle reason is a timeout, leaving it alone
+on a stale overflow or a stale plain exit. This is deliberate, not an
+oversight: a *newer* generation's `runDoctor()` can legitimately set
+`_doctorWanted` while an older generation's doctorProc is still in flight
+(the first-open race, issue #31), and the version-gate success path that
+follows needs to still see it once that older run finally frees `doctorProc`
+up — clearing it unconditionally on every stale exit would drop that request
+on the floor. The wedge the round 2 rule guards against (#54 round 3) stays
+closed regardless: every path that actually settles `_doctorOk` for the
+*current* generation — the timeout and overflow branches in
+`doctorProc.onExited`, `_applyDoctorReport()`, and `_endDoctorSession` — still
+clears `_doctorWanted` itself. The mechanism for all of this now lives in
+`doctorProc.onExited`'s generation-stale branch (a timeout handler only
+records the reason and kills; `onExited` owns every write) — see
+`_endDoctorSession`'s inline comment in `Tracker.qml` for the one case where a
+stale settle and this function's own explicit clear can land on the same
+run.
 
 **Settings guard (round 2): moved from the write side to the read side.** A
 reference-identity guard on `BarWidget`'s `Shared.Tracker.settings = …` write
