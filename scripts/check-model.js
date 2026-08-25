@@ -304,6 +304,89 @@ function checkOversizedIdFallsBackToIndex() {
   console.log("ok: an oversized id falls back to \"index N\" in the message")
 }
 
+// Review followups (issue #53): name/group/address were type-checked only
+// (id was the sole field with a length cap). Limits match config.v1.md's
+// byte caps and schemas/status.v1.json's maxLength for each field (name 64,
+// group 32, address 253) — an over-long value must be rejected, not
+// truncated (issue #41/#42's root cause: a limit must reject, not reshape).
+function checkOversizedNameRejected() {
+  var doc = {
+    version: 1,
+    groups: {},
+    connections: [{
+      id: "backend-dev", name: new Array(66).join("a"), group: "g", state: "stopped",
+      port: 1, address: "127.0.0.1", error: null
+    }]
+  }
+  var result = Model.parseStatusDocument(JSON.stringify(doc))
+
+  assert.strictEqual(result.ok, false, "a name over 64 chars must be rejected")
+  assert.strictEqual(result.degraded.kind, "schema")
+
+  console.log("ok: a Connection \"name\" over the 64-char contract cap is rejected")
+}
+
+function checkOversizedGroupRejected() {
+  var doc = {
+    version: 1,
+    groups: {},
+    connections: [{
+      id: "backend-dev", name: "Backend Dev", group: new Array(34).join("a"), state: "stopped",
+      port: 1, address: "127.0.0.1", error: null
+    }]
+  }
+  var result = Model.parseStatusDocument(JSON.stringify(doc))
+
+  assert.strictEqual(result.ok, false, "a group over 32 chars must be rejected")
+  assert.strictEqual(result.degraded.kind, "schema")
+
+  console.log("ok: a Connection \"group\" over the 32-char contract cap is rejected")
+}
+
+function checkOversizedAddressRejected() {
+  var doc = {
+    version: 1,
+    groups: {},
+    connections: [{
+      id: "backend-dev", name: "Backend Dev", group: "g", state: "stopped",
+      port: 1, address: new Array(255).join("a"), error: null
+    }]
+  }
+  var result = Model.parseStatusDocument(JSON.stringify(doc))
+
+  assert.strictEqual(result.ok, false, "an address over 253 chars must be rejected")
+  assert.strictEqual(result.degraded.kind, "schema")
+
+  console.log("ok: a Connection \"address\" over the 253-char contract cap is rejected")
+}
+
+// A value at exactly the contract's max length is valid, not off-by-one
+// rejected — pins the boundary from the other side of the three checks above.
+function checkNameGroupAddressAtLimitAccepted() {
+  var doc = {
+    version: 1,
+    groups: {},
+    connections: [{
+      id: "backend-dev",
+      name: new Array(65).join("a"), // exactly 64 chars
+      group: new Array(33).join("a"), // exactly 32 chars
+      state: "stopped",
+      port: 1,
+      address: new Array(254).join("a"), // exactly 253 chars
+      error: null
+    }]
+  }
+  var result = Model.parseStatusDocument(JSON.stringify(doc))
+
+  assert.strictEqual(result.ok, true, "name/group/address at exactly their contract max length must be accepted")
+  assert.strictEqual(result.degraded, null)
+  assert.strictEqual(result.connections[0].name.length, 64)
+  assert.strictEqual(result.connections[0].group.length, 32)
+  assert.strictEqual(result.connections[0].address.length, 253)
+
+  console.log("ok: name/group/address at exactly their contract max length are accepted")
+}
+
 // ---- Issue #46: one-pass grouping must match the old nested-scan output ---
 //
 // Reference implementations of the algorithms this issue replaces. They
@@ -559,6 +642,10 @@ checkInvalidPortRange()
 checkEmptyGroupRejected()
 checkEmptyAddressRejected()
 checkOversizedIdFallsBackToIndex()
+checkOversizedNameRejected()
+checkOversizedGroupRejected()
+checkOversizedAddressRejected()
+checkNameGroupAddressAtLimitAccepted()
 checkGroupingMatchesOldAlgorithmOnFixtures()
 checkGroupingMatchesOldAlgorithmSynthetic()
 checkGroupCountFallbackForDisabledAndOrphanGroups()

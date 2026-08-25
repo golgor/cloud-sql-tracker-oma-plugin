@@ -1027,7 +1027,8 @@ Singleton {
   // bounded by an early collector guard in each StdioCollector's
   // onDataChanged below (#41): StdioCollector has already appended and
   // published the buffer before that guard runs, so the real ceiling is the
-  // configured limit plus one QProcess read pass, not a hard producer cap.
+  // configured limit plus up to two QProcess read passes, about 128 KiB,
+  // because running = false is asynchronous — not a hard producer cap.
   // This helper only trims strings a human reads (stderr lines, the version
   // string) to a sane display length.
   function _safeText(collector, maxLen) {
@@ -1266,8 +1267,9 @@ Singleton {
     running: false
     command: []
     // waitForEnd: false + an early collector guard on each StdioCollector's
-    // onDataChanged bounds memory to the configured limit plus one QProcess
-    // read pass (#41), rather than StdioCollector buffering unbounded.
+    // onDataChanged bounds memory to the configured limit plus up to two
+    // QProcess read passes (#41), about 128 KiB, because running = false is
+    // asynchronous, rather than StdioCollector buffering unbounded.
     stdout: StdioCollector {
       id: versionStdout
       waitForEnd: false
@@ -1390,8 +1392,9 @@ Singleton {
     running: false
     command: []
     // waitForEnd: false + an early collector guard on each StdioCollector's
-    // onDataChanged bounds memory to the configured limit plus one QProcess
-    // read pass (#41), rather than StdioCollector buffering unbounded.
+    // onDataChanged bounds memory to the configured limit plus up to two
+    // QProcess read passes (#41), about 128 KiB, because running = false is
+    // asynchronous, rather than StdioCollector buffering unbounded.
     // The Status document is the largest thing this plugin parses, so its
     // ceiling (256 KB) is the highest of the four processes.
     stdout: StdioCollector {
@@ -1493,8 +1496,9 @@ Singleton {
     running: false
     command: []
     // waitForEnd: false + an early collector guard on each StdioCollector's
-    // onDataChanged bounds memory to the configured limit plus one QProcess
-    // read pass (#41), rather than StdioCollector buffering unbounded.
+    // onDataChanged bounds memory to the configured limit plus up to two
+    // QProcess read passes (#41), about 128 KiB, because running = false is
+    // asynchronous, rather than StdioCollector buffering unbounded.
     stdout: StdioCollector {
       id: doctorStdout
       waitForEnd: false
@@ -1609,8 +1613,9 @@ Singleton {
     running: false
     command: []
     // waitForEnd: false + an early collector guard on each StdioCollector's
-    // onDataChanged bounds memory to the configured limit plus one QProcess
-    // read pass (#41), rather than StdioCollector buffering unbounded.
+    // onDataChanged bounds memory to the configured limit plus up to two
+    // QProcess read passes (#41), about 128 KiB, because running = false is
+    // asynchronous, rather than StdioCollector buffering unbounded.
     stdout: StdioCollector {
       id: actionStdout
       waitForEnd: false
