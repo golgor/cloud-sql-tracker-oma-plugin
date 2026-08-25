@@ -772,6 +772,21 @@ Singleton {
     root._clearActionErrorsForIds(ids)
   }
 
+  // Wraps command execution in an OS shell pipe to enforce output byte ceilings
+  // at the producer boundary before QML's StdioCollector buffers data into memory
+  // (omarchy-plugin-marketplace#1895 follow-up, issue #84):
+  // sh -c 'exec "$1" "$2" "$3" ... | head -c <cap>' -- cloud-sql-tracker status --json
+  function _cappedCommand(argv, maxBytes) {
+    var cap = (typeof maxBytes === "number" && maxBytes > 0) ? maxBytes : 65536
+    if (!argv || !Array.isArray(argv) || argv.length === 0) return []
+    var script = 'exec "$1"'
+    for (var i = 1; i < argv.length; i++) {
+      script += ' "$' + (i + 1) + '"'
+    }
+    script += ' | head -c ' + cap
+    return ["sh", "-c", script, "--"].concat(argv)
+  }
+
   // ---- Internal: process launch ----------------------------------------------
 
   function _checkVersion() {
@@ -783,7 +798,7 @@ Singleton {
     root._versionStdoutFresh = false
     root._versionStderrFresh = false
     _versionProcGeneration = root._settingsGeneration
-    versionProc.command = [root.cliPath, "--version"]
+    versionProc.command = root._cappedCommand([root.cliPath, "--version"], 4096)
     versionTimeout.restart()
     versionProc.running = true
   }
@@ -810,7 +825,7 @@ Singleton {
     root._statusStdoutFresh = false
     root._statusStderrFresh = false
     root._statusLaunchEpoch = root._actionEpoch
-    statusProc.command = [root.cliPath, "status", "--json"]
+    statusProc.command = root._cappedCommand([root.cliPath, "status", "--json"], 65536)
     statusTimeout.restart()
     statusProc.running = true
   }
@@ -838,7 +853,7 @@ Singleton {
     root._doctorStdoutFresh = false
     root._doctorStderrFresh = false
     _doctorProcGeneration = root._settingsGeneration
-    doctorProc.command = [root.cliPath, "doctor", "--json"]
+    doctorProc.command = root._cappedCommand([root.cliPath, "doctor", "--json"], 65536)
     doctorTimeout.restart()
     doctorProc.running = true
   }
@@ -927,7 +942,7 @@ Singleton {
     root._actionTimeoutMsg = ""
     root._actionStdoutFresh = false
     root._actionStderrFresh = false
-    actionProc.command = [root.cliPath, verb].concat(args)
+    actionProc.command = root._cappedCommand([root.cliPath, verb].concat(args), 8192)
     actionTimeout.restart()
     actionProc.running = true
   }
