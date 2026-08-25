@@ -313,7 +313,7 @@ Tracker maps that to argv. UI does **not** build argv strings.
 
 ### Not on the interface
 
-Raw stdout/stderr buffers, `Process` objects, semver internals, logs/restart UIs, config file paths. Doctor is invoked only via `runDoctor()` (not continuous).
+Raw stdout/stderr buffers, `Process` objects, semver internals, logs/restart UIs, config file paths. Doctor is invoked only via `runDoctor()` (not continuous). `testDiagnosticsEnabled` / `testStreamBytes` are inert-by-default test diagnostics for `tests/process-seam`; product callers must not use them.
 
 ## Model.js (internal)
 
@@ -369,6 +369,8 @@ Golden fixture: sibling CLI `examples/status.v1.json` (copy or path in tests lat
 - [x] Panel lists `groups` / `connections`; start/stop via Action target
 - [x] Degraded empty-states for each `degraded.kind`
 - [x] Node/fixture smoke: `scripts/check-model.js`
+- [x] Static QML seam gate: `scripts/check-qml-seams.sh`
+- [x] Quickshell process seam flood/timeout gate: `scripts/check-process-seam.sh`
 - [ ] Optional later: broader automated UI tests (not required for v1 dogfood)
 
 Cold-start narrative: [`how-it-works.md`](./how-it-works.md). Agent workflow: [`../AGENTS.md`](../AGENTS.md).

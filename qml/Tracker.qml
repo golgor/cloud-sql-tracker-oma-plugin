@@ -324,6 +324,18 @@ Singleton {
   // since this is a plain passthrough, not a second copy of the state.
   readonly property bool preflightPending: root._doctorPending
 
+  // Test-only process seam diagnostics. Inert by default. The Quickshell
+  // harness in tests/process-seam enables this to record how many bytes
+  // StdioCollector actually exposed to QML after the producer-side cap.
+  // Product callers do not use it, and it does not affect process control.
+  property bool testDiagnosticsEnabled: false
+  signal testStreamBytes(string procName, string streamName, int byteLength)
+
+  function _emitTestStreamBytes(procName, streamName, byteLength) {
+    if (root.testDiagnosticsEnabled)
+      root.testStreamBytes(procName, streamName, byteLength)
+  }
+
   // Doctor preflight: null = not run this settings generation; true/false
   // after runDoctor(). Hard fail wins over a healthy Status for the panel
   // (full-body Degraded, no connection list).
@@ -772,11 +784,13 @@ Singleton {
     root._clearActionErrorsForIds(ids)
   }
 
-  // Wraps command execution so stdout and stderr both hit byte ceilings at
-  // the producer boundary before QML's StdioCollector buffers data into memory
+  // Process Adapter: a local shell cap wrapper around the frozen Control
+  // plane argv. It makes stdout and stderr hit byte ceilings at the producer
+  // boundary before QML's StdioCollector buffers data into memory
   // (omarchy-plugin-marketplace#1895 follow-up, issue #84):
   // bash -c '"$@" > >(head -c <stdout-cap>) 2> >(head -c <stderr-cap> >&2)'
-  // `"$@"` keeps argv as argv, so ids/Group names stay data instead of shell text.
+  // `"$@"` keeps the configured CLI command as the only Control plane command,
+  // and keeps ids/Group names as data instead of shell text.
   // The wrapper starts the CLI as a child job and immediately waits for it.
   // That gives the wrapper a PID to kill if QML's timeout signal arrives.
   // Capturing `rc` before `wait` preserves the CLI exit code; a plain pipeline
@@ -1327,6 +1341,7 @@ Singleton {
       waitForEnd: false
       onDataChanged: {
         root._versionStdoutFresh = true
+        root._emitTestStreamBytes("version", "stdout", data.byteLength)
         if (root._versionOverflow === "" && data.byteLength > 65536) {
           root._versionOverflow = "'--version' produced more than 64 KB of output."
           versionProc.signal(15)  // SIGTERM to wrapper: see versionTimeout
@@ -1339,6 +1354,7 @@ Singleton {
       waitForEnd: false
       onDataChanged: {
         root._versionStderrFresh = true
+        root._emitTestStreamBytes("version", "stderr", data.byteLength)
         if (root._versionOverflow === "" && data.byteLength > 65536) {
           root._versionOverflow = "'--version' stderr produced more than 64 KB of output."
           versionProc.signal(15)  // SIGTERM to wrapper: see versionTimeout
@@ -1452,6 +1468,7 @@ Singleton {
       waitForEnd: false
       onDataChanged: {
         root._statusStdoutFresh = true
+        root._emitTestStreamBytes("status", "stdout", data.byteLength)
         if (root._statusOverflow === "" && data.byteLength > 262144) {
           root._statusOverflow = "status --json produced more than 256 KB of output."
           statusProc.signal(15)  // SIGTERM to wrapper: see versionTimeout
@@ -1464,6 +1481,7 @@ Singleton {
       waitForEnd: false
       onDataChanged: {
         root._statusStderrFresh = true
+        root._emitTestStreamBytes("status", "stderr", data.byteLength)
         if (root._statusOverflow === "" && data.byteLength > 65536) {
           root._statusOverflow = "status --json stderr produced more than 64 KB of output."
           statusProc.signal(15)  // SIGTERM to wrapper: see versionTimeout
@@ -1561,6 +1579,7 @@ Singleton {
       waitForEnd: false
       onDataChanged: {
         root._doctorStdoutFresh = true
+        root._emitTestStreamBytes("doctor", "stdout", data.byteLength)
         if (root._doctorOverflow === "" && data.byteLength > 65536) {
           root._doctorOverflow = "doctor --json produced more than 64 KB of output."
           doctorProc.signal(15)  // SIGTERM to wrapper: see versionTimeout
@@ -1573,6 +1592,7 @@ Singleton {
       waitForEnd: false
       onDataChanged: {
         root._doctorStderrFresh = true
+        root._emitTestStreamBytes("doctor", "stderr", data.byteLength)
         if (root._doctorOverflow === "" && data.byteLength > 65536) {
           root._doctorOverflow = "doctor --json stderr produced more than 64 KB of output."
           doctorProc.signal(15)  // SIGTERM to wrapper: see versionTimeout
@@ -1677,6 +1697,7 @@ Singleton {
       waitForEnd: false
       onDataChanged: {
         root._actionStdoutFresh = true
+        root._emitTestStreamBytes("action", "stdout", data.byteLength)
         if (root._actionOverflow === "" && data.byteLength > 65536) {
           root._actionOverflow = "'" + (root._pendingActionVerb !== "" ? root._pendingActionVerb : "action") + "' produced more than 64 KB of output."
           actionProc.signal(15)  // SIGTERM to wrapper: see versionTimeout
@@ -1689,6 +1710,7 @@ Singleton {
       waitForEnd: false
       onDataChanged: {
         root._actionStderrFresh = true
+        root._emitTestStreamBytes("action", "stderr", data.byteLength)
         if (root._actionOverflow === "" && data.byteLength > 65536) {
           root._actionOverflow = "'" + (root._pendingActionVerb !== "" ? root._pendingActionVerb : "action") + "' stderr produced more than 64 KB of output."
           actionProc.signal(15)  // SIGTERM to wrapper: see versionTimeout

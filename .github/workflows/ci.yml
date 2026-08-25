@@ -1,0 +1,48 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - 'fix/**'
+      - 'feat/**'
+      - 'docs/**'
+      - 'wayfinder/**'
+      - 'test/**'
+  workflow_dispatch:
+    inputs:
+      run_omarchy_process_seam:
+        description: 'Run the self-hosted Omarchy process seam job'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  portable:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node scripts/check-model.js
+      - run: bash scripts/check-qml-seams.sh
+
+  omarchy-process-seam:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_omarchy_process_seam }}
+    runs-on: [self-hosted, linux, arch, omarchy]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: omarchy plugin validate .
+      - run: bash scripts/check-process-seam.sh
+      - name: Upload process seam artifacts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: process-seam-artifacts
+          path: .test-artifacts/process-seam/
+          if-no-files-found: ignore
