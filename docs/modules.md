@@ -167,12 +167,16 @@ again if the underlying setup issue is still there.
 **Round 4 fixes (still round 2's semantics, tightened further):**
 - The reset above now also forces `_doctorProcGeneration = -1` when a
   doctorProc launched for the session that just ended is still running. Its
-  settle path (`doctorTimeout` / `doctorProc.onExited`) then takes the same
+  settle path (`doctorProc.onExited`, issue #58) then takes the same
   stale-generation branch a real settings change already uses to invalidate
   an in-flight probe, rather than writing a fresh doctor verdict for a
-  session that no longer has a panel open to show it. Both of those branches
-  already clear `_doctorWanted` unconditionally before checking the
-  generation, so this cannot reopen the wedge below.
+  session that no longer has a panel open to show it. This cannot reopen
+  the wedge below: `_endDoctorSession` already clears `_doctorWanted`
+  itself, unconditionally, before forcing the generation stale — the stale
+  branch it lands on only clears `_doctorWanted` again when the settle
+  reason is a timeout or an overflow, leaving it alone on a plain exit so a
+  *newer* generation's own request (set by a runDoctor() call after this
+  reset) can survive to be acted on.
 - The reset moved from an `if (wasOpen && !anyOpen)` check inside
   `_recomputeViewerAggregates` to `onPanelOpenChanged: if (!panelOpen) …`
   declared next to the rest of the doctor state. `panelOpen`'s own facade
@@ -180,16 +184,32 @@ again if the underlying setup issue is still there.
   (QML dedupes a bool write that does not change the value), so this needed
   no hand-rolled "was it open before" local to begin with.
 
-**`_doctorWanted` lifecycle (round 2 fix).** Every code path that settles
-`_doctorOk` (to `true` or `false`) must also leave `_doctorWanted` `false` —
-otherwise a later version-gate flap (CLI briefly unreachable, then found again)
-can find `_doctorWanted` stranded `true` from before the settlement and
-re-launch doctor, re-pinning "Checking setup…" on a check this generation
-already answered. `_applyDoctorReport()` already cleared both flags up front
-for every branch; `doctorTimeout.onTriggered` and the doctor-overflow exit in
-`doctorProc.onExited` did not — both now clear `_doctorWanted` unconditionally,
-before their own settings-generation staleness check, so a stale-generation
-early return cannot skip it either.
+**`_doctorWanted` lifecycle (round 2 fix; mechanism moved by issue #58).**
+Every code path that settles `_doctorOk` (to `true` or `false`) for the
+*current* generation must also leave `_doctorWanted` `false` — otherwise a
+later version-gate flap (CLI briefly unreachable, then found again) can find
+`_doctorWanted` stranded `true` from before the settlement and re-launch
+doctor, re-pinning "Checking setup…" on a check this generation already
+answered. `_applyDoctorReport()` clears both flags up front for every branch,
+so this always holds for a fresh-generation settle.
+
+A *stale*-generation settle (this run's generation no longer matches
+`_settingsGeneration`) is different on purpose, since issue #58's review: it
+clears `_doctorWanted` only when the settle reason is a timeout or an
+overflow — both are a definite, self-contained failure for that old
+generation, so nothing else is waiting on this run's answer. A **plain**
+stale exit (a normal, non-timeout, non-overflow settle for a generation
+nobody current cares about any more) leaves `_doctorWanted` untouched: a
+*newer* generation's `runDoctor()` can legitimately set it while an older
+generation's doctorProc is still in flight (the first-open race, issue #31),
+and the version-gate success path that follows needs to still see it once
+that older run finally frees `doctorProc` up — clearing it unconditionally on
+every stale exit would drop that request on the floor. The mechanism for all
+of this now lives in `doctorProc.onExited`'s generation-stale branch (a
+timeout handler only records the reason and kills; `onExited` owns every
+write) — see `_endDoctorSession`'s inline comment in `Tracker.qml` for the one
+case where a stale settle and this function's own explicit clear can land on
+the same run.
 
 **Settings guard (round 2): moved from the write side to the read side.** A
 reference-identity guard on `BarWidget`'s `Shared.Tracker.settings = …` write
