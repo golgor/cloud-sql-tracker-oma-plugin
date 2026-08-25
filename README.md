@@ -100,7 +100,13 @@ goes away, not the reload step.
 ./scripts/dev-link --section left      # place elsewhere
 ./scripts/dev-link --no-enable         # link + validate only
 node scripts/check-model.js            # Model.js + fixtures (no QML runtime)
+bash scripts/check-qml-seams.sh        # static Tracker/Process seam gate
+bash scripts/check-process-seam.sh     # Quickshell fake-CLI flood/timeout gate
 ```
+
+`check-process-seam.sh` runs a throwaway Quickshell harness with a fake Control
+plane. It uses `QT_QPA_PLATFORM=offscreen`, writes artifacts under
+`.test-artifacts/process-seam/`, and fails when `quickshell` is missing.
 
 It never deletes a real plugin directory: if something other than a symlink
 to this checkout already occupies that path, it fails with no changes made.
@@ -128,6 +134,10 @@ cloud-sql-tracker doctor --json   # once when the panel opens
 cloud-sql-tracker start <id|--group=G|--group G|--all>
 cloud-sql-tracker stop  <id|--group=G|--group G|--all>
 ```
+
+Tracker may execute those argv through a local shell cap wrapper so stdout and
+stderr are bounded before QML buffers them. The wrapper does not add Control
+plane commands. It passes ids and Group names as data argv.
 
 It does **not** read or write the connections config file. Doctor hard-fail
 hides the connection list (setup unusable). Per-connection start failures show

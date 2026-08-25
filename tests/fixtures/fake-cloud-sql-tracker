@@ -1,0 +1,211 @@
+#!/usr/bin/env bash
+# Fake Control plane adapter for Tracker process seam tests.
+# It implements only the frozen cloud-sql-tracker CLI contract used by this repo.
+
+set -euo pipefail
+
+mode=${CST_FAKE_MODE:-happy}
+bytes=${CST_FAKE_BYTES:-10485760}
+chunk_bytes=${CST_FAKE_CHUNK_BYTES:-65536}
+trace_file=${CST_FAKE_TRACE:-}
+
+case "$bytes" in ''|*[!0-9]*) bytes=10485760 ;; esac
+case "$chunk_bytes" in ''|*[!0-9]*) chunk_bytes=65536 ;; esac
+if [ "$chunk_bytes" -le 0 ]; then chunk_bytes=65536; fi
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+repo_root=$(CDPATH= cd -- "$script_dir/../.." && pwd)
+
+json_escape() {
+  local value=${1-}
+  value=${value//\\/\\\\}
+  value=${value//"/\\"}
+  value=${value//$'\n'/\\n}
+  value=${value//$'\r'/\\r}
+  value=${value//$'\t'/\\t}
+  printf '%s' "$value"
+}
+
+trace() {
+  [ -n "$trace_file" ] || return 0
+  mkdir -p -- "$(dirname -- "$trace_file")"
+
+  local event=$1
+  local command=$2
+  local stream=${3:-}
+  local event_bytes=${4:-}
+  local code=${5:-}
+
+  printf '{"event":"%s","pid":%d,"mode":"%s","command":"%s"' \
+    "$(json_escape "$event")" \
+    "$$" \
+    "$(json_escape "$mode")" \
+    "$(json_escape "$command")" >> "$trace_file"
+  if [ -n "$stream" ]; then
+    printf ',"stream":"%s"' "$(json_escape "$stream")" >> "$trace_file"
+  fi
+  if [ -n "$event_bytes" ]; then
+    printf ',"bytes":%s' "$event_bytes" >> "$trace_file"
+  fi
+  if [ -n "$code" ]; then
+    printf ',"code":%s' "$code" >> "$trace_file"
+  fi
+  printf '}\n' >> "$trace_file"
+}
+
+parse_command() {
+  case "${1-}" in
+    --version)
+      [ "$#" -eq 1 ] && { printf '%s' '--version'; return 0; }
+      ;;
+    status)
+      [ "${2-}" = "--json" ] && [ "$#" -eq 2 ] && { printf '%s' 'status --json'; return 0; }
+      ;;
+    doctor)
+      [ "${2-}" = "--json" ] && [ "$#" -eq 2 ] && { printf '%s' 'doctor --json'; return 0; }
+      ;;
+    start|stop)
+      if [ "$#" -eq 2 ] && [ "${2-}" = "--all" ]; then
+        printf '%s %s' "$1" 'all'; return 0
+      fi
+      if [ "$#" -eq 2 ] && [[ "${2-}" == --group=* ]]; then
+        printf '%s %s' "$1" 'group'; return 0
+      fi
+      if [ "$#" -eq 3 ] && [ "${2-}" = "--group" ] && [ -n "${3-}" ]; then
+        printf '%s %s' "$1" 'group'; return 0
+      fi
+      if [ "$#" -eq 2 ] && [[ "${2-}" != --* ]]; then
+        printf '%s %s' "$1" 'id'; return 0
+      fi
+      ;;
+  esac
+  return 1
+}
+
+write_bytes() {
+  local count=$1
+  local stream=$2
+  local char=${3:-X}
+  trace attempted-write "$cmd" "$stream" "$count" ""
+
+  local remaining=$count
+  local this_chunk
+  while [ "$remaining" -gt 0 ]; do
+    this_chunk=$chunk_bytes
+    if [ "$remaining" -lt "$this_chunk" ]; then
+      this_chunk=$remaining
+    fi
+    if [ "$stream" = stdout ]; then
+      head -c "$this_chunk" /dev/zero | tr '\0' "$char"
+    else
+      head -c "$this_chunk" /dev/zero | tr '\0' "$char" >&2
+    fi
+    remaining=$((remaining - this_chunk))
+  done
+}
+
+happy_status() {
+  cat "$repo_root/fixtures/status.v1.happy.json"
+}
+
+happy_doctor() {
+  printf '%s\n' '{"version":1,"ok":true,"checks":[]}'
+}
+
+doctor_fail() {
+  printf '%s\n' '{"version":1,"ok":false,"checks":[{"id":"proxy_bin","status":"fail","detail":"fake doctor failure","hint":"test only"}]}'
+}
+
+hang_forever() {
+  trace hang "$cmd" "" "" ""
+  # Keep the fake CLI process itself alive. The Tracker wrapper is expected to
+  # kill this PID on timeout.
+  while :; do
+    # The child sleep may briefly outlive a SIGKILL to this shell. The test
+    # asserts this fake CLI PID is gone, not that the kernel has no unrelated
+    # sleep process.
+    sleep 1
+  done
+}
+
+if ! cmd=$(parse_command "$@"); then
+  trace rejected "$(printf '%s ' "$@")" "" "" 64
+  printf 'error: unsupported fake-cloud-sql-tracker argv:' >&2
+  printf ' %s' "$@" >&2
+  printf '\n' >&2
+  exit 64
+fi
+
+trace start "$cmd" "" "" ""
+
+case "$cmd:$mode" in
+  '--version:version-flood')
+    write_bytes "$bytes" stdout V
+    trace exit "$cmd" "" "" 0
+    exit 0
+    ;;
+  '--version:'*)
+    printf '0.1.0\n'
+    trace exit "$cmd" "" "" 0
+    exit 0
+    ;;
+  'status --json:status-flood')
+    write_bytes "$bytes" stdout S
+    trace exit "$cmd" "" "" 0
+    exit 0
+    ;;
+  'status --json:stderr-flood')
+    write_bytes "$bytes" stderr E
+    trace exit "$cmd" "" "" 2
+    exit 2
+    ;;
+  'status --json:hang-status')
+    hang_forever
+    ;;
+  'status --json:'*)
+    happy_status
+    trace exit "$cmd" "" "" 0
+    exit 0
+    ;;
+  'doctor --json:doctor-fail')
+    doctor_fail
+    trace exit "$cmd" "" "" 3
+    exit 3
+    ;;
+  'doctor --json:doctor-flood')
+    write_bytes "$bytes" stdout D
+    trace exit "$cmd" "" "" 0
+    exit 0
+    ;;
+  'doctor --json:stderr-flood')
+    write_bytes "$bytes" stderr E
+    trace exit "$cmd" "" "" 2
+    exit 2
+    ;;
+  'doctor --json:'*)
+    happy_doctor
+    trace exit "$cmd" "" "" 0
+    exit 0
+    ;;
+  start*':hang-action'|stop*':hang-action')
+    hang_forever
+    ;;
+  start*':action-flood'|stop*':action-flood')
+    write_bytes "$bytes" stdout A
+    trace exit "$cmd" "" "" 0
+    exit 0
+    ;;
+  start*':stderr-flood'|stop*':stderr-flood')
+    write_bytes "$bytes" stderr E
+    trace exit "$cmd" "" "" 2
+    exit 2
+    ;;
+  start*:*|stop*:*)
+    trace exit "$cmd" "" "" 0
+    exit 0
+    ;;
+esac
+
+trace rejected "$cmd" "" "" 64
+printf 'error: unhandled fake mode %s for %s\n' "$mode" "$cmd" >&2
+exit 64
