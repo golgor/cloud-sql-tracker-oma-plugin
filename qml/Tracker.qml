@@ -638,8 +638,16 @@ Singleton {
     root.runningCount = parsed.running
     root.errorCount = parsed.error
     root.total = parsed.total
-    root.groups = parsed.groups
+    // Performance optimization (issue #80): Assign connections before groups.
+    // In QML, Panel.qml's flatRows property binding depends on groupList
+    // (root.groups) and reads connectionList (root.connections).
+    // If groups was assigned first, changing groups would trigger flatRows
+    // to evaluate against the stale connections array, and assigning
+    // connections on the next line would trigger flatRows a second time.
+    // Assigning connections first ensures the updated connection data is
+    // ready when groups triggers flatRows, evaluating flatRows ONCE per poll tick.
     root.connections = parsed.connections
+    root.groups = parsed.groups
     // Drop row overlays once Status shows the Connection is live again.
     root._clearActionErrorsForHealthyConnections(parsed.connections)
     // Healthy Status must not wipe doctor hard-fail *or* in-flight preflight.
