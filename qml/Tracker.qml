@@ -825,7 +825,9 @@ Singleton {
     root._statusStdoutFresh = false
     root._statusStderrFresh = false
     root._statusLaunchEpoch = root._actionEpoch
-    statusProc.command = root._cappedCommand([root.cliPath, "status", "--json"], 65536)
+    // Matches CLI contract docs/status-document.v1.md: status --json can emit up to
+    // 256 KiB (262,144 bytes) for up to 32 Connections.
+    statusProc.command = root._cappedCommand([root.cliPath, "status", "--json"], 262144)
     statusTimeout.restart()
     statusProc.running = true
   }
