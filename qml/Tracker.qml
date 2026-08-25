@@ -814,7 +814,32 @@ Singleton {
   }
 
   function _runAction(verb, target) {
-    if (actionProc.running) return
+    if (actionProc.running) {
+      // Same-frame race across two monitors sharing one Tracker (issue #54
+      // made this reachable): the loser's click passed Panel's trackerBusy
+      // guard before this action's actionProc.running flipped true. Refused,
+      // not queued — write the loser's own row error, mirroring the
+      // hyphen-refusal path (#49), instead of a silent knob snap-back.
+      var busyMsg = "Cannot " + verb + " — another action is already running."
+      console.warn("Tracker: " + busyMsg)
+      var busyIds = root._idsForTarget(target)
+      if (busyIds.length > 0) {
+        root._setActionErrorsForIds(busyIds, {
+          message: busyMsg,
+          verb: verb,
+          exitCode: -1
+        })
+      }
+      // Same terminal-outcome contract as timeout/overflow/non-zero-exit and
+      // the hyphen refusal below: a settled actionErrors write must not wait
+      // for the next poll tick.
+      delayedRefresh.restart()
+      // Refused, not launched — still advance actionEpoch so a caller
+      // holding optimistic state for this action can let go (see
+      // "Document provenance" above _actionEpoch's declaration).
+      root._actionEpoch++
+      return
+    }
     if (root._bailOnCliPathShape()) {
       // Refused, not launched — still advance actionEpoch so a caller
       // holding optimistic state for this action can let go (see
