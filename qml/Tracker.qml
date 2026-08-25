@@ -766,6 +766,7 @@ Singleton {
     if (root._bailOnCliPathShape()) return
     _versionExited = false
     root._versionOverflow = ""
+    root._versionTimeoutMsg = ""
     root._versionStdoutFresh = false
     root._versionStderrFresh = false
     _versionProcGeneration = root._settingsGeneration
@@ -792,6 +793,7 @@ Singleton {
     if (statusProc.running) { root._statusRetryWanted = true; return }
     _statusExited = false
     root._statusOverflow = ""
+    root._statusTimeoutMsg = ""
     root._statusStdoutFresh = false
     root._statusStderrFresh = false
     root._statusLaunchEpoch = root._actionEpoch
@@ -808,6 +810,7 @@ Singleton {
       root._setDegraded("doctor_failed", "Checking setup…")
     _doctorExited = false
     root._doctorOverflow = ""
+    root._doctorTimeoutMsg = ""
     root._doctorStdoutFresh = false
     root._doctorStderrFresh = false
     _doctorProcGeneration = root._settingsGeneration
@@ -897,6 +900,7 @@ Singleton {
     root._pendingActionTarget = target
     _actionExited = false
     root._actionOverflow = ""
+    root._actionTimeoutMsg = ""
     root._actionStdoutFresh = false
     root._actionStderrFresh = false
     actionProc.command = [root.cliPath, verb].concat(args)
@@ -923,16 +927,20 @@ Singleton {
   // turn the retry into an unbounded loop (#45).
   property bool _statusRetryWanted: false
 
-  // Set by a timeout handler right before signal(9) + running = false,
-  // cleared at the top of the matching onExited. onExited still fires after
-  // that — signal delivery is async, and Quickshell reports the result as a
-  // crash exit (exitCode=9, CrashExit), not a normal one — so without this
-  // flag, onExited's own failure-path cleanup would run again on top of the
-  // timeout handler's cleanup.
-  property bool _versionTimedOut: false
-  property bool _statusTimedOut: false
-  property bool _actionTimedOut: false
-  property bool _doctorTimedOut: false
+  // Set by a timeout handler right before signal(9) + running = false, to
+  // "" otherwise. onExited reads and clears it, and owns every write for
+  // both a timeout and a normal exit (issue #58) — signal delivery is
+  // async, and Quickshell reports the killed run as a crash exit
+  // (exitCode=9, CrashExit), not a normal one, so onExited prefers this
+  // recorded reason over the exit code instead of reporting a timed-out run
+  // as a generic non-zero exit. Cleared at launch, not only at read time, in
+  // _checkVersion/_checkStatus/_checkDoctor/_runAction — the same rule the
+  // overflow fields below already follow, so a reason recorded for run N-1
+  // can never describe run N's result.
+  property string _versionTimeoutMsg: ""
+  property string _statusTimeoutMsg: ""
+  property string _actionTimeoutMsg: ""
+  property string _doctorTimeoutMsg: ""
 
   // Set by an onDataChanged byte guard on that process's stdout/stderr
   // StdioCollector, right before signal(9) + running = false, when the CLI's
@@ -941,8 +949,12 @@ Singleton {
   // first, reports the overflow as this process's failure instead of
   // parsing the (incomplete, killed-mid-stream) buffer, and clears it back
   // to "" so the next launch starts clean — same shape as the
-  // _xxxTimedOut flags above, so the overflow, timeout, and normal-exit
-  // paths never both apply a state for the same run.
+  // _xxxTimeoutMsg fields above, so the overflow, timeout, and normal-exit
+  // paths never both apply a state for the same run. An overflow guard
+  // trips before a timeout can, because it sets running = false itself the
+  // moment the byte ceiling is crossed — the timeout timer's own `if
+  // (xProc.running)` guard is then already false when it later fires, so
+  // the two paths cannot both write a message for one run.
   property string _versionOverflow: ""
   property string _statusOverflow: ""
   property string _doctorOverflow: ""
@@ -1151,18 +1163,15 @@ Singleton {
         // runningChanged(false) arrives later, after exited — set _versionExited
         // first so its "process never started" branch does not overwrite this
         // timeout message with the generic cli_missing one.
-        root._versionTimedOut = true
         root._versionExited = true
+        // Record why; onExited owns the rest (issue #58) — it fires after
+        // this kill and prefers this reason over the exit code.
+        root._versionTimeoutMsg = "'" + root.cliPath + " --version' timed out after 3s."
         // We send SIGKILL: SIGTERM is trappable and a hung CLI must not
         // outlive its timeout. running = false is bookkeeping only — signal(9)
         // is what ends it.
         versionProc.signal(9)
         versionProc.running = false
-        if (root._versionProcGeneration !== root._settingsGeneration) return
-        root.loaded = true
-        root._doctorWanted = false
-        root._doctorPending = false
-        root._setDegraded("cli_missing", "'" + root.cliPath + " --version' timed out after 3s.")
       }
     }
   }
@@ -1174,18 +1183,11 @@ Singleton {
     onTriggered: {
       if (statusProc.running) {
         console.warn("Tracker: statusProc timed out after 3s, terminating process")
-        root._statusTimedOut = true
         root._statusExited = true
+        // Record why; onExited owns the rest (issue #58).
+        root._statusTimeoutMsg = "'status --json' timed out after 3s."
         statusProc.signal(9)   // SIGKILL: see versionTimeout
         statusProc.running = false
-        root.loaded = true
-        root._applyParsed({
-          ok: false,
-          degraded: {
-            kind: "status_failed",
-            message: "'status --json' timed out after 3s."
-          }
-        })
       }
     }
   }
@@ -1197,21 +1199,13 @@ Singleton {
     onTriggered: {
       if (doctorProc.running) {
         console.warn("Tracker: doctorProc timed out after 5s, terminating process")
-        root._doctorTimedOut = true
         root._doctorExited = true
+        // Record why; onExited owns the rest (issue #58), including the
+        // issue #54 round 2 rule that every settling path leaves
+        // _doctorWanted false.
+        root._doctorTimeoutMsg = "'doctor --json' timed out after 5s."
         doctorProc.signal(9)   // SIGKILL: see versionTimeout
         doctorProc.running = false
-        root._doctorPending = false
-        // Issue #54 round 2: clear unconditionally, before the generation
-        // check below -- every path that settles _doctorOk must also leave
-        // _doctorWanted false, or a later version-gate flap can find
-        // _doctorWanted stranded true and re-launch doctor (re-pinning
-        // "Checking setup…") for a check this generation already failed.
-        root._doctorWanted = false
-        if (root._doctorProcGeneration !== root._settingsGeneration) return
-        root._doctorOk = false
-        root._doctorFailMessage = "'doctor --json' timed out after 5s."
-        root._setDegraded("doctor_failed", root._doctorFailMessage)
       }
     }
   }
@@ -1223,24 +1217,13 @@ Singleton {
     onTriggered: {
       if (actionProc.running) {
         console.warn("Tracker: actionProc timed out after 15s, terminating process")
-        root._actionTimedOut = true
         root._actionExited = true
+        // Record why; onExited owns the rest (issue #58) — busyKey,
+        // _actionEpoch, actionErrors, and delayedRefresh.
+        var verb = root._pendingActionVerb !== "" ? root._pendingActionVerb : "action"
+        root._actionTimeoutMsg = "'" + root.cliPath + " " + verb + "' timed out after 15s."
         actionProc.signal(9)   // SIGKILL: see versionTimeout
         actionProc.running = false
-        root.busyKey = ""
-        root._actionEpoch++
-        var verb = root._pendingActionVerb !== "" ? root._pendingActionVerb : "action"
-        var target = root._pendingActionTarget
-        var ids = root._idsForTarget(target)
-        var msg = "'" + root.cliPath + " " + verb + "' timed out after 15s."
-        if (ids.length > 0) {
-          root._setActionErrorsForIds(ids, {
-            message: msg,
-            verb: verb,
-            exitCode: -1
-          })
-        }
-        delayedRefresh.restart()
       }
     }
   }
@@ -1279,10 +1262,12 @@ Singleton {
       }
     }
     onExited: function (exitCode) {
-      // Stale post-timeout exit — see the _versionTimedOut comment above.
-      if (root._versionTimedOut) { root._versionTimedOut = false; return }
       versionTimeout.stop()
       root._versionExited = true
+      // Read and clear now — a reason recorded for this run must not
+      // survive to describe a later one (issue #58).
+      var timeoutMsg = root._versionTimeoutMsg
+      root._versionTimeoutMsg = ""
       if (root._versionProcGeneration !== root._settingsGeneration) {
         // Settings (cliPath/minCliVersion) changed while this probe was in
         // flight. Its result no longer applies — do not let a stale pass or
@@ -1292,6 +1277,15 @@ Singleton {
         return
       }
       root.loaded = true
+      // A recorded timeout reason wins over the exit code (issue #58): the
+      // kill reports as a crash exit, which must not read as a generic
+      // non-zero exit.
+      if (timeoutMsg !== "") {
+        root._doctorWanted = false
+        root._doctorPending = false
+        root._setDegraded("cli_missing", timeoutMsg)
+        return
+      }
       if (root._versionOverflow !== "") {
         var overflowMsg = root._versionOverflow
         root._versionOverflow = ""
@@ -1391,10 +1385,19 @@ Singleton {
       }
     }
     onExited: function (exitCode) {
-      // Stale post-timeout exit — see the _versionTimedOut comment above.
-      if (root._statusTimedOut) { root._statusTimedOut = false; return }
       statusTimeout.stop()
       root._statusExited = true
+      // Read and clear now — a reason recorded for this run must not
+      // survive to describe a later one (issue #58).
+      var timeoutMsg = root._statusTimeoutMsg
+      root._statusTimeoutMsg = ""
+      // A recorded timeout reason wins over the exit code (issue #58): the
+      // kill reports as a crash exit, which must not read as a generic
+      // non-zero exit.
+      if (timeoutMsg !== "") {
+        root._applyParsed({ ok: false, degraded: { kind: "status_failed", message: timeoutMsg } })
+        return
+      }
       if (root._statusOverflow !== "") {
         var overflowMsg = root._statusOverflow
         root._statusOverflow = ""
@@ -1484,14 +1487,32 @@ Singleton {
       }
     }
     onExited: function (exitCode) {
-      // Stale post-timeout exit — see the _versionTimedOut comment above.
-      if (root._doctorTimedOut) { root._doctorTimedOut = false; return }
       doctorTimeout.stop()
       root._doctorExited = true
+      // Read and clear now — a reason recorded for this run must not
+      // survive to describe a later one (issue #58).
+      var timeoutMsg = root._doctorTimeoutMsg
+      root._doctorTimeoutMsg = ""
       if (root._doctorProcGeneration !== root._settingsGeneration) {
         // Settings (cliPath) changed while doctor was in flight — drop result.
         root._doctorOverflow = ""
         root._doctorPending = false
+        // Issue #54 round 2: every path that settles this generation's
+        // doctor check leaves _doctorWanted false too, including a stale
+        // exit that carries a timeout reason for a generation nobody is
+        // waiting on any more.
+        root._doctorWanted = false
+        return
+      }
+      // A recorded timeout reason wins over the exit code (issue #58): the
+      // kill reports as a crash exit, which must not read as a generic
+      // non-zero exit.
+      if (timeoutMsg !== "") {
+        root._doctorPending = false
+        root._doctorWanted = false
+        root._doctorOk = false
+        root._doctorFailMessage = timeoutMsg
+        root._setDegraded("doctor_failed", timeoutMsg)
         return
       }
       if (root._doctorOverflow !== "") {
@@ -1567,18 +1588,31 @@ Singleton {
       }
     }
     onExited: function (exitCode) {
-      // Timeout above already sent SIGKILL, called running = false, and ran
-      // its own cleanup (busyKey, _actionEpoch, actionErrors). onExited still
-      // fires after that — without this guard it double-bumps _actionEpoch
-      // and overwrites the timeout message with "exited with code 9".
-      if (root._actionTimedOut) { root._actionTimedOut = false; return }
       actionTimeout.stop()
       root._actionExited = true
+      // Read and clear now — a reason recorded for this run must not
+      // survive to describe a later one (issue #58).
+      var timeoutMsg = root._actionTimeoutMsg
+      root._actionTimeoutMsg = ""
       root.busyKey = ""
       root._actionEpoch++
       var verb = root._pendingActionVerb !== "" ? root._pendingActionVerb : "action"
       var target = root._pendingActionTarget
       var ids = root._idsForTarget(target)
+      // A recorded timeout reason wins over the exit code (issue #58): the
+      // kill reports as a crash exit, which must not read as a generic
+      // non-zero exit.
+      if (timeoutMsg !== "") {
+        if (ids.length > 0) {
+          root._setActionErrorsForIds(ids, {
+            message: timeoutMsg,
+            verb: verb,
+            exitCode: -1
+          })
+        }
+        delayedRefresh.restart()
+        return
+      }
       // start/stop have no global Degraded state — an overflow here is a row
       // failure like any other action failure (actionErrors), not a Tracker
       // degraded kind.
