@@ -292,9 +292,12 @@ Singleton {
   // fresh document as authoritative will settle against it.
   //
   // actionEpoch counts actions whose outcome is settled — bumped when one exits,
-  // and also when one is *refused*, so a refused action still advances the
-  // counter and a consumer holding state for it can let go rather than waiting
-  // forever on an action that never ran.
+  // and also when one is *refused before launch* (actionProc never runs for
+  // it), so a refused action still advances the counter and a consumer
+  // holding state for it can let go rather than waiting forever on an action
+  // that never ran. A refusal reachable only while actionProc is already
+  // running (the lost shared-Tracker race, issue #72) must NOT bump here —
+  // see the comment on that branch in _runAction.
   //
   // documentEpoch is the actionEpoch that was current when the poll producing
   // the last applied document was *launched*. So `documentEpoch > e`, for an `e`
@@ -814,7 +817,42 @@ Singleton {
   }
 
   function _runAction(verb, target) {
-    if (actionProc.running) return
+    if (actionProc.running) {
+      // Same-frame race across two monitors sharing one Tracker (issue #54
+      // made this reachable): the loser's click passed Panel's trackerBusy
+      // guard before this action's actionProc.running flipped true. Refused,
+      // not queued — write the loser's own row error, mirroring the
+      // hyphen-refusal path (#49), instead of a silent knob snap-back.
+      var busyMsg = "Cannot " + verb + " — another action is already running."
+      console.warn("Tracker: " + busyMsg)
+      var busyIds = root._idsForTarget(target)
+      if (busyIds.length > 0) {
+        root._setActionErrorsForIds(busyIds, {
+          message: busyMsg,
+          verb: verb,
+          exitCode: -1
+        })
+      }
+      // Same terminal-outcome contract as timeout/overflow/non-zero-exit and
+      // the hyphen refusal below: a settled actionErrors write must not wait
+      // for the next poll tick.
+      delayedRefresh.restart()
+      // Deliberately NOT root._actionEpoch++ here, unlike every other refusal
+      // below. Those are all refused *before launch* (actionProc never runs
+      // for them this call). This is the one refusal reachable only while the
+      // winner's actionProc is already running — bumping here would inflate
+      // the epoch mid-flight, before the winner's own exit/timeout bump. A
+      // status poll launched in that window (still pre-exit) would then
+      // stamp documentEpoch past the winner's captured intentEpoch, and
+      // settleIntents would clear the WINNER's intent against pre-action
+      // truth — the exact bounce this epoch machinery exists to prevent. The
+      // loser does not need the bump either: settleIntents is gated on
+      // trackerBusy, so the loser's own intent can only settle on the first
+      // document observed after actionProc actually stops, and every path
+      // that stops it (exit, timeout, never-started) already bumps the
+      // epoch and restarts delayedRefresh for that.
+      return
+    }
     if (root._bailOnCliPathShape()) {
       // Refused, not launched — still advance actionEpoch so a caller
       // holding optimistic state for this action can let go (see

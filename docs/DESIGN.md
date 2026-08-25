@@ -70,8 +70,8 @@ The list above predates the chrome pass. These six points supersede it:
   handshakes from one click. The asymmetry is a safety property, not an oversight.
 - **Busy blocks every control's clicks, but dims nothing.** Point 3 above said "do not
   block the whole panel harder than necessary"; in practice Tracker runs one action at
-  a time and ignores a concurrent one silently, so leaving other controls live means
-  dead clicks. Blocking them all is therefore right — but *dimming* them all is not:
+  a time and refuses a concurrent one (issue #72), so leaving other controls live
+  means dead clicks. Blocking them all is therefore right — but *dimming* them all is not:
   an action is a sub-second CLI round trip, so it reads as the whole panel flashing on
   every toggle. Feedback comes instead from the switch showing **intent** (it slides on
   click and holds until a Status document confirms or denies it), a spinner on the

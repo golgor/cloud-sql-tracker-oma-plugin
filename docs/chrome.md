@@ -394,9 +394,10 @@ are the single place the busy guard and the intent write live, so no control rea
 
 ## 5 · Busy
 
-`Tracker` runs **one action at a time**: `_runAction` returns early and silently
-when `actionProc.running`. So a control that stays live during another action is a
-**dead click** — it looks active and does nothing.
+`Tracker` runs **one action at a time**: `_runAction` returns early when
+`actionProc.running` (writing a row error rather than acting — issue #72). So a
+control that stays live during another action is a **dead click** — it looks
+active and does nothing.
 
 > **Rule.** While `tracker.busy`, every action control **stops accepting clicks**.
 > But **nothing dims.** An action is a sub-second CLI round trip; dimming every idle
@@ -409,8 +410,8 @@ when `actionProc.running`. So a control that stays live during another action is
 Every command function in the Panel opens with `if (!tracker || tracker.busy) return`.
 That is the enforcement point, and it sits *before* intent is recorded — a control
 that let a click through would otherwise strand an intent on an action Tracker
-silently dropped. Each control's own gate is then only a second line of defence,
-and none of them has to dim to provide it.
+refused (issue #72). Each control's own gate is then only a second line of
+defence, and none of them has to dim to provide it.
 
 | Control | Blocks clicks via | Visually silent when blocked? |
 |---------|-------------------|-------------------------------|

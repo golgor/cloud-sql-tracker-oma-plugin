@@ -240,6 +240,7 @@ When `degraded !== null`, UI must not present a healthy empty switchboard as suc
 | Start fails after doctor passed (per Connection) | `start` non-zero | `actionErrors[id]` — row paints error; no global banner |
 | Single-id start refused (disabled, …) | exit **2** | `actionErrors[id]` (and no sticky start intent once settled) |
 | Hyphen-leading id/Group target (#49) | **no process launched** | `actionErrors[id]` — plugin-side refusal, no exit code |
+| Second action while one is in flight (#72) | no process launched | `actionErrors` — plugin-side refusal, no exit code |
 
 #### Document provenance
 
@@ -250,7 +251,7 @@ before an action can exit after it, carrying pre-action truth.
 
 | Prop | Meaning |
 |------|---------|
-| `actionEpoch` | Count of actions whose outcome is settled. Advanced when an action exits, **and when one is refused**, so optimistic state held for an action that never ran is still released. |
+| `actionEpoch` | Count of actions whose outcome is settled. Advanced when an action exits, **and when one is refused before launch**, so optimistic state held for an action that never ran is still released. A refusal reachable only while `actionProc` is already running (the lost shared-Tracker race, issue #72) does not advance it — the winner's own exit/timeout bump already covers settling for both sides. |
 | `documentEpoch` | The `actionEpoch` current when the poll producing the last applied document was *launched*. Only a successful Status document advances it — a failed poll says nothing about the world. |
 
 **Rule for callers.** Capture `actionEpoch` when you act; treat a document as
