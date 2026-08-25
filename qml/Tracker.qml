@@ -772,19 +772,21 @@ Singleton {
     root._clearActionErrorsForIds(ids)
   }
 
-  // Wraps command execution in an OS shell pipe to enforce output byte ceilings
-  // at the producer boundary before QML's StdioCollector buffers data into memory
+  // Wraps command execution so stdout and stderr both hit byte ceilings at
+  // the producer boundary before QML's StdioCollector buffers data into memory
   // (omarchy-plugin-marketplace#1895 follow-up, issue #84):
-  // sh -c 'exec "$1" "$2" "$3" ... | head -c <cap>' -- cloud-sql-tracker status --json
-  function _cappedCommand(argv, maxBytes) {
-    var cap = (typeof maxBytes === "number" && maxBytes > 0) ? maxBytes : 65536
+  // bash -c '"$@" > >(head -c <stdout-cap>) 2> >(head -c <stderr-cap> >&2)'
+  // `"$@"` keeps argv as argv, so ids/Group names stay data instead of shell text.
+  // The wrapper starts the CLI as a child job and immediately waits for it.
+  // That gives the wrapper a PID to kill if QML's timeout signal arrives.
+  // Capturing `rc` before `wait` preserves the CLI exit code; a plain pipeline
+  // would instead report `head`'s exit code.
+  function _cappedCommand(argv, maxStdoutBytes, maxStderrBytes) {
+    var stdoutCap = (typeof maxStdoutBytes === "number" && maxStdoutBytes > 0) ? maxStdoutBytes : 65536
+    var stderrCap = (typeof maxStderrBytes === "number" && maxStderrBytes > 0) ? maxStderrBytes : 65536
     if (!argv || !Array.isArray(argv) || argv.length === 0) return []
-    var script = 'exec "$1"'
-    for (var i = 1; i < argv.length; i++) {
-      script += ' "$' + (i + 1) + '"'
-    }
-    script += ' | head -c ' + cap
-    return ["sh", "-c", script, "--"].concat(argv)
+    var script = 'child=0; cleanup() { if [ "$child" -ne 0 ]; then kill -9 "$child" 2>/dev/null; wait "$child" 2>/dev/null; fi; }; trap \'cleanup; exit 124\' TERM INT; "$@" > >(head -c ' + stdoutCap + ') 2> >(head -c ' + stderrCap + ' >&2) & child=$!; wait "$child"; rc=$?; wait; exit "$rc"'
+    return ["bash", "-c", script, "--"].concat(argv)
   }
 
   // ---- Internal: process launch ----------------------------------------------
@@ -798,7 +800,7 @@ Singleton {
     root._versionStdoutFresh = false
     root._versionStderrFresh = false
     _versionProcGeneration = root._settingsGeneration
-    versionProc.command = root._cappedCommand([root.cliPath, "--version"], 4096)
+    versionProc.command = root._cappedCommand([root.cliPath, "--version"], 4096, 65536)
     versionTimeout.restart()
     versionProc.running = true
   }
@@ -827,7 +829,7 @@ Singleton {
     root._statusLaunchEpoch = root._actionEpoch
     // Matches CLI contract docs/status-document.v1.md: status --json can emit up to
     // 256 KiB (262,144 bytes) for up to 32 Connections.
-    statusProc.command = root._cappedCommand([root.cliPath, "status", "--json"], 262144)
+    statusProc.command = root._cappedCommand([root.cliPath, "status", "--json"], 262144, 65536)
     statusTimeout.restart()
     statusProc.running = true
   }
@@ -855,7 +857,7 @@ Singleton {
     root._doctorStdoutFresh = false
     root._doctorStderrFresh = false
     _doctorProcGeneration = root._settingsGeneration
-    doctorProc.command = root._cappedCommand([root.cliPath, "doctor", "--json"], 65536)
+    doctorProc.command = root._cappedCommand([root.cliPath, "doctor", "--json"], 65536, 65536)
     doctorTimeout.restart()
     doctorProc.running = true
   }
@@ -944,7 +946,7 @@ Singleton {
     root._actionTimeoutMsg = ""
     root._actionStdoutFresh = false
     root._actionStderrFresh = false
-    actionProc.command = root._cappedCommand([root.cliPath, verb].concat(args), 8192)
+    actionProc.command = root._cappedCommand([root.cliPath, verb].concat(args), 8192, 65536)
     actionTimeout.restart()
     actionProc.running = true
   }
@@ -953,10 +955,11 @@ Singleton {
   property string _pendingActionVerb: ""
   property var _pendingActionTarget: null
 
-  // Guards distinguishing "the process exited normally" (onExited fired)
-  // from "the process never started" (Quickshell only emits runningChanged
-  // in that case — the binary was not found, or was not executable). See
-  // onRunningChanged on each Process below.
+  // Guards distinguishing "the wrapper process exited normally" (onExited
+  // fired) from "the wrapper process never started" (Quickshell only emits
+  // runningChanged in that case — bash was not found, or was not executable).
+  // Wrapped CLI exec failures settle through onExited as bash exit 126/127.
+  // See onRunningChanged on each Process below.
   property bool _versionExited: true
   property bool _statusExited: true
   property bool _actionExited: true
@@ -968,15 +971,15 @@ Singleton {
   // turn the retry into an unbounded loop (#45).
   property bool _statusRetryWanted: false
 
-  // A timeout handler sets this right before signal(9) + running = false.
+  // A timeout handler sets this right before signal(15) + running = false.
   // "" means this run has not timed out.
   // onExited reads it, clears it, and owns every write for both a timeout
   // and a normal exit (issue #58).
-  // A killed process still reports a crash exit (exitCode=9, CrashExit),
-  // not a normal one. onExited prefers this recorded reason over the exit
-  // code — see the "settle preference" comment on versionProc.onExited
-  // below for the one full copy of that rule; the other three onExited
-  // handlers just point back to it.
+  // The wrapper exits with its own timeout code after killing the CLI child.
+  // onExited prefers this recorded reason over that exit code — see the
+  // "settle preference" comment on versionProc.onExited below for the one
+  // full copy of that rule; the other three onExited handlers just point
+  // back to it.
   // Cleared at launch too, not only at read time, in
   // _checkVersion/_checkStatus/_checkDoctor/_runAction. The overflow
   // fields below follow the same rule: a reason recorded for run N-1 must
@@ -987,7 +990,7 @@ Singleton {
   property string _doctorTimeoutMsg: ""
 
   // Set by an onDataChanged byte guard on that process's stdout/stderr
-  // StdioCollector, right before signal(9) + running = false, when the CLI's
+  // StdioCollector, right before signal(15) + running = false, when the CLI's
   // output crosses this process's ceiling (#41). "" means no overflow.
   // Non-empty carries the message to report. The matching onExited reads it
   // first, reports the overflow as this process's failure instead of
@@ -1039,6 +1042,13 @@ Singleton {
 
   function _missingCliMessage() {
     return "Could not run '" + root.cliPath + "'. Check the cliPath setting or your PATH."
+  }
+
+  // `bash -c` is now the Process executable. If the wrapped CLI cannot exec,
+  // bash exits 126/127 instead of Quickshell taking the old never-started path.
+  // The frozen CLI contract only uses 0-4, so these still mean launch failure.
+  function _isWrapperExecFailure(exitCode) {
+    return exitCode === 126 || exitCode === 127
   }
 
   // Reads and clears _statusRetryWanted, then polls once more. Called only
@@ -1226,18 +1236,13 @@ Singleton {
         // its own top, unconditionally, and the verified signal ordering
         // (exited always arrives before runningChanged(false), for a
         // process that was actually running) means onExited always runs
-        // first. A write here would be redundant on every reachable
-        // ordering. In the one case it would matter — SIGKILL cannot reap
-        // this child — neither signal ever fires, so the write would not
-        // help there either.
-        // Record why; onExited owns the rest (issue #58) — it fires after
-        // this kill and prefers this reason over the exit code (see the
-        // settle-preference comment on onExited below).
+        // first. Record why; onExited owns the rest (issue #58) and prefers
+        // this reason over the wrapper's timeout exit code.
         root._versionTimeoutMsg = "'" + root.cliPath + " --version' timed out after 3s."
-        // We send SIGKILL: SIGTERM is trappable and a hung CLI must not
-        // outlive its timeout. running = false is bookkeeping only — signal(9)
-        // is what ends it.
-        versionProc.signal(9)
+        // We send SIGTERM to the bash wrapper. The wrapper's trap kills the
+        // real CLI child with SIGKILL, so a hung CLI does not outlive its
+        // timeout. running = false is bookkeeping only.
+        versionProc.signal(15)
         versionProc.running = false
       }
     }
@@ -1254,7 +1259,7 @@ Singleton {
         // sets root._statusExited, and always runs first.
         // Record why; onExited owns the rest (issue #58).
         root._statusTimeoutMsg = "'status --json' timed out after 3s."
-        statusProc.signal(9)   // SIGKILL: see versionTimeout
+        statusProc.signal(15)  // SIGTERM to wrapper: see versionTimeout
         statusProc.running = false
       }
     }
@@ -1273,7 +1278,7 @@ Singleton {
         // leaves _doctorWanted false there, unlike a plain stale exit — see
         // doctorProc.onExited's generation-stale branch.
         root._doctorTimeoutMsg = "'doctor --json' timed out after 5s."
-        doctorProc.signal(9)   // SIGKILL: see versionTimeout
+        doctorProc.signal(15)  // SIGTERM to wrapper: see versionTimeout
         doctorProc.running = false
       }
     }
@@ -1289,20 +1294,20 @@ Singleton {
         // Not written here — see versionTimeout's comment: onExited already
         // sets root._actionExited, and always runs first.
         //
-        // Accepted residual: if SIGKILL cannot reap this child (stuck in an
-        // uninterruptible kernel wait, for example), neither exited nor
-        // runningChanged ever fires, and nothing settles until it does.
-        // busyKey stays held for that whole time, so a click during it
-        // lands on #72's "another action is already running" row error —
-        // the honest signal for a process that is, in fact, still running.
-        // No timer-side mitigation: issue #58 asks for exactly one settle
-        // point, onExited, and this is the cost of that.
+        // Accepted residual: if SIGKILL cannot reap the real CLI child (stuck
+        // in an uninterruptible kernel wait, for example), the wrapper cannot
+        // finish waiting for it, and nothing settles until it does. busyKey
+        // stays held for that whole time, so a click during it lands on #72's
+        // "another action is already running" row error — the honest signal
+        // for a process that is, in fact, still running. No timer-side
+        // mitigation: issue #58 asks for exactly one settle point, onExited,
+        // and this is the cost of that.
         //
         // Record why; onExited owns the rest (issue #58) — busyKey,
         // _actionEpoch, actionErrors, and delayedRefresh.
         var verb = root._pendingActionVerb !== "" ? root._pendingActionVerb : "action"
         root._actionTimeoutMsg = "'" + root.cliPath + " " + verb + "' timed out after 15s."
-        actionProc.signal(9)   // SIGKILL: see versionTimeout
+        actionProc.signal(15)  // SIGTERM to wrapper: see versionTimeout
         actionProc.running = false
       }
     }
@@ -1314,10 +1319,9 @@ Singleton {
     id: versionProc
     running: false
     command: []
-    // waitForEnd: false + an early collector guard on each StdioCollector's
-    // onDataChanged bounds memory to the configured limit plus up to two
-    // QProcess read passes (#41), about 128 KiB, because running = false is
-    // asynchronous, rather than StdioCollector buffering unbounded.
+    // _cappedCommand() caps stdout and stderr before StdioCollector sees
+    // either stream. The collector guard stays as a defensive backstop if
+    // the wrapper fails or changes.
     stdout: StdioCollector {
       id: versionStdout
       waitForEnd: false
@@ -1325,7 +1329,7 @@ Singleton {
         root._versionStdoutFresh = true
         if (root._versionOverflow === "" && data.byteLength > 65536) {
           root._versionOverflow = "'--version' produced more than 64 KB of output."
-          versionProc.signal(9)   // SIGKILL: see versionTimeout
+          versionProc.signal(15)  // SIGTERM to wrapper: see versionTimeout
           versionProc.running = false
         }
       }
@@ -1337,7 +1341,7 @@ Singleton {
         root._versionStderrFresh = true
         if (root._versionOverflow === "" && data.byteLength > 65536) {
           root._versionOverflow = "'--version' stderr produced more than 64 KB of output."
-          versionProc.signal(9)   // SIGKILL: see versionTimeout
+          versionProc.signal(15)  // SIGTERM to wrapper: see versionTimeout
           versionProc.running = false
         }
       }
@@ -1360,10 +1364,9 @@ Singleton {
       root.loaded = true
       // Settle preference (issue #58 — the one full copy of this rule; the
       // other three onExited handlers below point back here): a recorded
-      // timeout reason wins over the exit code. The kill this run went
-      // through reports as a crash exit (exitCode=9, CrashExit), not a
-      // normal one, so checking the reason first is what stops a timed-out
-      // run from reading as a generic non-zero exit.
+      // timeout reason wins over the exit code. The wrapper exits with its
+      // own timeout code after killing the CLI child, so checking the reason
+      // first stops a timed-out run from reading as a generic non-zero exit.
       if (timeoutMsg !== "") {
         root._doctorWanted = false
         root._doctorPending = false
@@ -1439,12 +1442,11 @@ Singleton {
     id: statusProc
     running: false
     command: []
-    // waitForEnd: false + an early collector guard on each StdioCollector's
-    // onDataChanged bounds memory to the configured limit plus up to two
-    // QProcess read passes (#41), about 128 KiB, because running = false is
-    // asynchronous, rather than StdioCollector buffering unbounded.
-    // The Status document is the largest thing this plugin parses, so its
-    // ceiling (256 KB) is the highest of the four processes.
+    // _cappedCommand() caps stdout and stderr before StdioCollector sees
+    // either stream. The collector guard stays as a defensive backstop if
+    // the wrapper fails or changes. The Status document is the largest thing
+    // this plugin parses, so its ceiling (256 KB) is the highest of the four
+    // processes.
     stdout: StdioCollector {
       id: statusStdout
       waitForEnd: false
@@ -1452,7 +1454,7 @@ Singleton {
         root._statusStdoutFresh = true
         if (root._statusOverflow === "" && data.byteLength > 262144) {
           root._statusOverflow = "status --json produced more than 256 KB of output."
-          statusProc.signal(9)   // SIGKILL: see versionTimeout
+          statusProc.signal(15)  // SIGTERM to wrapper: see versionTimeout
           statusProc.running = false
         }
       }
@@ -1464,7 +1466,7 @@ Singleton {
         root._statusStderrFresh = true
         if (root._statusOverflow === "" && data.byteLength > 65536) {
           root._statusOverflow = "status --json stderr produced more than 64 KB of output."
-          statusProc.signal(9)   // SIGKILL: see versionTimeout
+          statusProc.signal(15)  // SIGTERM to wrapper: see versionTimeout
           statusProc.running = false
         }
       }
@@ -1490,6 +1492,14 @@ Singleton {
         // at most once per poll (#41 followup).
         gc()
         root._applyParsed({ ok: false, degraded: { kind: "status_failed", message: overflowMsg } })
+        return
+      }
+      if (root._isWrapperExecFailure(exitCode)) {
+        // The wrapper started, but the CLI did not. This is the old
+        // never-started status path: invalidate the version gate and re-probe
+        // instead of treating a missing binary as a Status document failure.
+        root._versionOk = false
+        root._setDegraded("cli_missing", root._missingCliMessage())
         return
       }
       if (exitCode !== 0) {
@@ -1543,10 +1553,9 @@ Singleton {
     id: doctorProc
     running: false
     command: []
-    // waitForEnd: false + an early collector guard on each StdioCollector's
-    // onDataChanged bounds memory to the configured limit plus up to two
-    // QProcess read passes (#41), about 128 KiB, because running = false is
-    // asynchronous, rather than StdioCollector buffering unbounded.
+    // _cappedCommand() caps stdout and stderr before StdioCollector sees
+    // either stream. The collector guard stays as a defensive backstop if
+    // the wrapper fails or changes.
     stdout: StdioCollector {
       id: doctorStdout
       waitForEnd: false
@@ -1554,7 +1563,7 @@ Singleton {
         root._doctorStdoutFresh = true
         if (root._doctorOverflow === "" && data.byteLength > 65536) {
           root._doctorOverflow = "doctor --json produced more than 64 KB of output."
-          doctorProc.signal(9)   // SIGKILL: see versionTimeout
+          doctorProc.signal(15)  // SIGTERM to wrapper: see versionTimeout
           doctorProc.running = false
         }
       }
@@ -1566,7 +1575,7 @@ Singleton {
         root._doctorStderrFresh = true
         if (root._doctorOverflow === "" && data.byteLength > 65536) {
           root._doctorOverflow = "doctor --json stderr produced more than 64 KB of output."
-          doctorProc.signal(9)   // SIGKILL: see versionTimeout
+          doctorProc.signal(15)  // SIGTERM to wrapper: see versionTimeout
           doctorProc.running = false
         }
       }
@@ -1660,10 +1669,9 @@ Singleton {
     id: actionProc
     running: false
     command: []
-    // waitForEnd: false + an early collector guard on each StdioCollector's
-    // onDataChanged bounds memory to the configured limit plus up to two
-    // QProcess read passes (#41), about 128 KiB, because running = false is
-    // asynchronous, rather than StdioCollector buffering unbounded.
+    // _cappedCommand() caps stdout and stderr before StdioCollector sees
+    // either stream. The collector guard stays as a defensive backstop if
+    // the wrapper fails or changes.
     stdout: StdioCollector {
       id: actionStdout
       waitForEnd: false
@@ -1671,7 +1679,7 @@ Singleton {
         root._actionStdoutFresh = true
         if (root._actionOverflow === "" && data.byteLength > 65536) {
           root._actionOverflow = "'" + (root._pendingActionVerb !== "" ? root._pendingActionVerb : "action") + "' produced more than 64 KB of output."
-          actionProc.signal(9)   // SIGKILL: see versionTimeout
+          actionProc.signal(15)  // SIGTERM to wrapper: see versionTimeout
           actionProc.running = false
         }
       }
@@ -1683,7 +1691,7 @@ Singleton {
         root._actionStderrFresh = true
         if (root._actionOverflow === "" && data.byteLength > 65536) {
           root._actionOverflow = "'" + (root._pendingActionVerb !== "" ? root._pendingActionVerb : "action") + "' stderr produced more than 64 KB of output."
-          actionProc.signal(9)   // SIGKILL: see versionTimeout
+          actionProc.signal(15)  // SIGTERM to wrapper: see versionTimeout
           actionProc.running = false
         }
       }
