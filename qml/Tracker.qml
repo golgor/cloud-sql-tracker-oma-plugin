@@ -816,11 +816,19 @@ Singleton {
   }
 
   function _checkDoctor() {
+    // Case 1: doctorProc is already running in flight (e.g. fast panel close and
+    // reopen — issue #79). Setting _doctorWanted = true ensures that when the current
+    // doctor run finishes, _applyDoctorReport automatically re-runs _checkDoctor() so
+    // a fresh doctor preflight is executed for the new panel open session.
     if (doctorProc.running) {
       root._doctorWanted = true
       return
     }
+    // Case 2: Invalid or hyphen-leading cliPath shape.
     if (root._bailOnCliPathShape()) return
+    // Case 3: Launch doctor --json preflight process. Set _doctorPending = true
+    // and temporary doctor_failed ("Checking setup…") so the connection list remains
+    // hidden until doctor completes and returns a verdict.
     root._doctorPending = true
     if (root.degraded === null || root.degraded.kind === "doctor_failed")
       root._setDegraded("doctor_failed", "Checking setup…")

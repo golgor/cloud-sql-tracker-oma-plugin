@@ -428,7 +428,14 @@ Panel {
     }
     var sections = root.visibleSections
     if (sections.length === 0) {
-      // Do not wipe remembered cursor while doctor preflight is pending (#37).
+      // Case 1: Doctor preflight is in flight (issue #37 / #79). While doctor
+      // runs on panel open, degraded is temporarily "doctor_failed" ("Checking setup…")
+      // and visibleSections is empty ([]). Returning early preserves the remembered
+      // focusSection and selectedIndex so the selection box restores to the
+      // last interacted row once doctor preflight completes.
+      // Case 2: Degraded for a real setup failure (cli_missing, cli_old, schema,
+      // status_failed) or zero connections configured (publishedCount === 0).
+      // Call resetCursor() to stand down.
       if (root.degraded !== null && root.degraded.kind === "doctor_failed" && root.tracker && root.tracker.preflightPending)
         return
       root.resetCursor()
