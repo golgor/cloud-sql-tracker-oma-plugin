@@ -263,15 +263,22 @@ function parseConnection(c) {
   if (typeof c.id !== "string" || !CONNECTION_ID_PATTERN.test(c.id)) {
     return { ok: false, reason: "a missing or invalid \"id\" field" }
   }
-  if (typeof c.name !== "string") {
+  // name's max length matches config.v1.md's byte cap (64) / schemas/
+  // status.v1.json's connection.name.maxLength — same reasoning as the id
+  // cap above: an unbounded name is attacker- or bug-controlled and reaches
+  // the Panel row label and the bar tooltip verbatim.
+  if (typeof c.name !== "string" || c.name.length > 64) {
     return { ok: false, reason: "a missing or invalid \"name\" field" }
   }
   // group and address are non-empty per contract (config.v1.md); an empty
   // group renders as a header with no visible rows (Panel.flatRows skips
   // it) and an empty address renders as ":<port>" — both read as broken,
   // not merely unusual, so both fail the document rather than defaulting.
-  if (typeof c.group !== "string" || c.group.length === 0) {
-    return { ok: false, reason: "a missing or empty \"group\" field" }
+  // Max lengths (group 32, address 253) match config.v1.md's byte caps /
+  // schemas/status.v1.json's connection.group.maxLength and
+  // connection.address.maxLength — same reasoning as name and id above.
+  if (typeof c.group !== "string" || c.group.length === 0 || c.group.length > 32) {
+    return { ok: false, reason: "a missing, empty, or too-long \"group\" field" }
   }
   if (typeof c.state !== "string") {
     return { ok: false, reason: "a missing or invalid \"state\" field" }
@@ -279,8 +286,8 @@ function parseConnection(c) {
   if (!isValidPort(c.port)) {
     return { ok: false, reason: "a missing or out-of-range \"port\" field" }
   }
-  if (typeof c.address !== "string" || c.address.length === 0) {
-    return { ok: false, reason: "a missing or empty \"address\" field" }
+  if (typeof c.address !== "string" || c.address.length === 0 || c.address.length > 253) {
+    return { ok: false, reason: "a missing, empty, or too-long \"address\" field" }
   }
   if (c.enabled !== undefined && typeof c.enabled !== "boolean") {
     return { ok: false, reason: "a non-boolean \"enabled\" field" }
