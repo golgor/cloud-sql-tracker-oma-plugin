@@ -350,8 +350,8 @@ Panel {
   }
 
   function activateCursor() {
-    // Tracker silently ignores a second concurrent action, and an ignored one
-    // would leave an intent stranded until the next poll pulled the knob back.
+    // Tracker refuses a second concurrent action (issue #72), and a refused
+    // one would leave an intent stranded until the next poll pulled the knob back.
     if (root.trackerBusy) return
     if (root.focusSection === "header") { root.stopAll(); return }
     var name = root.sectionGroupName(root.focusSection)
@@ -527,10 +527,11 @@ Panel {
 
   // ---- Busy (chrome.md §5) ------------------------------------------------
   //
-  // Tracker runs one action at a time: _runAction returns early and silently
-  // when actionProc.running. A control left enabled during another action is
-  // therefore a dead click — it looks live and does nothing. So *every* action
-  // control is disabled while busy; only the busyKey target spins.
+  // Tracker runs one action at a time: _runAction returns early and refuses
+  // (issue #72) when actionProc.running. A control left enabled during
+  // another action is therefore a dead click — it looks live and does
+  // nothing. So *every* action control is disabled while busy; only the
+  // busyKey target spins.
 
   function busyForKey(key) {
     return root.trackerBusy && root.busyKey === key
@@ -959,7 +960,7 @@ Panel {
         // (DESIGN.md, chrome.md §5). Busy is swallowed in the command functions
         // instead, which also blocks the click *before* intent is recorded —
         // dropping the busy term from `enabled` on its own would let a click
-        // through to a start Tracker silently ignores, stranding an intent.
+        // through to a start Tracker refuses (issue #72), stranding an intent.
         readonly property bool revealed: header.hasCursor || header.groupBusy
         opacity: revealed ? 1.0 : 0.0
 
