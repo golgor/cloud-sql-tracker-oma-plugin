@@ -41,7 +41,7 @@ jobs:
       - run: bash scripts/check-process-seam.sh
       - name: Upload process seam artifacts
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: process-seam-artifacts
           path: .test-artifacts/process-seam/
