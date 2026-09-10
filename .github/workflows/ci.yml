@@ -23,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
       - run: node scripts/check-model.js
@@ -34,14 +34,14 @@ jobs:
     runs-on: [self-hosted, linux, arch, omarchy]
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
       - run: omarchy plugin validate .
       - run: bash scripts/check-process-seam.sh
       - name: Upload process seam artifacts
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: process-seam-artifacts
           path: .test-artifacts/process-seam/
